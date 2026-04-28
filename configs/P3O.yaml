@@ -1,0 +1,188 @@
+# Copyright 2023 OmniSafe Team. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+defaults:
+  # seed for random number generator
+  seed: 0
+  exp_name: P3O
+  # training configurations
+  train_cfgs:
+    # device to use for training, options: cpu, cuda, cuda:0, cuda:0,1, etc.
+    device: cuda
+    # number of threads for torch
+    torch_threads: 16
+    # number of vectorized environments
+    vector_env_nums: 1
+    # number of parallel agent, similar to a3c
+    parallel: 1
+    # total number of steps to train
+#    total_steps: 10000000
+    epochs: 1400
+  # algorithm configurations
+  algo_cfgs:
+    # number of steps to update the policy
+    steps_per_epoch: 480   # original 20000
+    # number of iterations to update the policy
+    update_iters: 20     # original 10
+    # batch size for each iteration
+    batch_size: 128      # original 64
+    # target kl divergence
+    target_kl: 0.02
+    # the coefficient of cost penalty
+    kappa: 5.0
+    # entropy coefficient
+    entropy_coef: 0.0
+#    # normalize reward
+#    reward_normalize: False
+#    # normalize cost
+#    cost_normalize: False
+#    # normalize observation
+#    obs_normalize: True
+    # early stop when kl divergence is bigger than target kl
+    kl_early_stop: True
+    # use max gradient norm
+    use_max_grad_norm: True
+    # max gradient norm
+    max_grad_norm: 10.0   # original 40.0
+    # use critic norm
+    use_critic_norm: True
+    # critic norm coefficient
+    critic_norm_coef: 0.001
+    # reward discount factor
+    gamma: 0.9
+    # cost discount factor
+    cost_gamma: 0.9
+    # lambda for gae
+    lam: 0.95
+    # lambda for cost gae
+    lam_c: 0.85    # original 0.95
+    # clip ratio
+    clip: 0.2
+    # cost limit
+    cost_limit: 0
+    # advantage estimation method, options: gae, retrace
+    adv_estimation_method: gae
+    # standardize reward advantage
+    standardized_rew_adv: True
+    # standardize cost advantage
+    standardized_cost_adv: True
+    # penalty coefficient
+    penalty_coef: 0.0
+    # use cost
+    use_cost: True
+  # logger configurations
+  logger_cfgs:
+    # use wandb for logging
+    use_wandb: False
+    # wandb project name
+    wandb_project: omnisafe
+    # use tensorboard for logging
+    use_tensorboard: True
+    # save model frequency
+    save_model_freq: 100
+    # save logger path
+    log_dir: "./runs/华为双层预编码"
+    # save model path
+    window_lens: 100
+  # model configurations
+  model_cfgs:
+    # weight initialization mode
+    weight_initialization_mode: "kaiming_uniform"
+    # actor type, options: gaussian, gaussian_learning, binary_learning
+    actor_type: gaussian_learning
+    # linear learning rate decay
+    linear_lr_decay: True
+    # exploration noise anneal
+    exploration_noise_anneal: False
+    # std upper bound, and lower bound
+    std_range: [0.5, 0.05]      # original [0.5, 0.1]
+    # actor network configurations
+    actor:
+      # hidden layer sizes
+      hidden_sizes: [64, 64]    # original [64, 64]
+      # activation function
+      activation: tanh
+      # out_activation: tanh
+      # learning rate
+      lr: 0.0003      # original 0.0003
+    critic:
+      # hidden layer sizes
+      hidden_sizes: [64, 64]   # original [64, 64]
+      # activation function
+      activation: tanh
+      # learning rate
+      lr: 0.0003      # original 0.0003
+  env_cfgs:
+    # 配置系统参数
+    B: 3                        # BS数量
+    Mt: 256                  # BS天线数量
+    Mr: 4                     # UE天线数量
+    U: 2                         # 用户数量 (每个BS内)
+    Bw: 30                       # 单个子载波带宽(kHz)
+    N: 14                        # 每个时隙的OFDM符号数
+    t_slot: 0.5                   # 单时隙长度(ms)
+    #    T: 10                        # 考虑的时隙数量
+    #    dP: 0.002                     # 功率分配粒度
+    # 信道模型参数
+    #    d0: 0.392                    # 大尺度衰落参考距离
+    #    alpha: 4                     # 大尺度衰落路损因子
+    #    sigma_1: 3                   # 噪声功率，科学计数法的实数部分
+    #    sigma_2: 12                  # 噪声功率，科学计数法的负指数部分
+    fc: 6700                      # 中心频率(MHz)
+    d0: 31.84                        # 大尺度衰落模型参数
+    d1: 21.5
+    d2: 19
+    r: 0.9                         # 信道空间相关系数
+    rho: 0.9966                    # 信道时间相关系数
+    theta_bar: 90                  # 固定信道中心角，从ULA平面方向算起(角度制)
+    delta_theta: 5               # 围绕中心角向两边扩散的最大角度(角度制)
+    kai: 3.141592653589793             # 2*pi*d/λ，固定取d/λ为1/2
+    #    sigma_sh: 8                   # shadow fading(dB)
+    #    delta_sh: 0.5                 # shadow fading参数
+    noise: -174                   # 噪声功率(dBm/Hz) original -174  改后-142
+    #    noise_figure: 8               # dB
+    P: 23.18                          # 固定发射功率(dBm)  原23.18
+    # 以随机方式初始化系统中AP和用户位置
+    region_bound: 300            # 所考虑区域大小
+    min_distance_BS: 10          # O-RU间最小间距
+    min_distance_User: 20         # 用户间最小间距
+    # 设置用户参数
+    Users_pos: [ [ 52, 201 ], [ 178, 262 ], [ 371, 258 ], [ 466, 179 ], [ 168, 507 ], [ 276, 332 ], [ 412, 479 ], [ 488, 307 ] ]
+    h_U: 1.65                       # 用户高度
+    N_layer: 2                         # 用户数据流数
+    BLER_T: 0.1                     # 用户BLER目标
+    # 设置BS参数
+#    max_P_dBm: 0                      # 每个BS所能承受的最大功率(dBm)
+#    max_P: 100                    # 每个BS所能承受的最大功率单元数
+    h_BS: 15                        # BS高度
+    K_BS: 3                         # BS能连接的最大用户数
+    SRS_period: 160                  # SRS信号周期(slot)
+    buffer_len: 15                   # BS处存放的历史ACK/NACK条数  原5
+    feedback_delay: 4               # ACK/NACK反馈延迟
+    BS_pos: [[0, 0], [300, 0], [150, 300]]
+    # 是否使用SINR均值老化动态估计
+    mean_SINR_estimate: True
+    # 是否L2获取L1实际预编码
+    ceiling: True
+    # 是否传统OLLA机制
+    OLLA: False
+    # 是否读取固定信道实现
+    fix_channel: True
+    # normalize reward
+    reward_normalize: False
+    # normalize cost
+    cost_normalize: False
+    # normalize observation
+    obs_normalize: True
