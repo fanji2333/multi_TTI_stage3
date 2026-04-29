@@ -57,12 +57,6 @@ class ActorCritic(nn.Module):
         if model_cfgs.actor.lr is not None:
             self.actor_optimizer: optim.Optimizer
             self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=model_cfgs.actor.lr)
-        if model_cfgs.critic.lr is not None:
-            self.reward_critic_optimizer: optim.Optimizer = optim.Adam(
-                self.reward_critic.parameters(),
-                lr=model_cfgs.critic.lr,
-            )
-        if model_cfgs.actor.lr is not None:
             # self.actor_scheduler: LinearLR | ConstantLR
             if model_cfgs.linear_lr_decay:
                 self.actor_scheduler = LinearLR(
@@ -79,6 +73,20 @@ class ActorCritic(nn.Module):
                     total_iters=epochs,
                     verbose=True,
                 )
+        if model_cfgs.critic.lr is not None:
+            self.reward_critic_optimizer: optim.Optimizer = optim.Adam(
+                self.reward_critic.parameters(),
+                lr=model_cfgs.critic.lr,
+            )
+            if model_cfgs.linear_lr_decay:
+                self.reward_critic_scheduler = LinearLR(
+                    self.reward_critic_optimizer,
+                    start_factor=1.0,
+                    end_factor=0.0,
+                    total_iters=epochs,
+                    verbose=True,
+                )
+
 
     def step(
         self,

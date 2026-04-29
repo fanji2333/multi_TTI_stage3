@@ -290,6 +290,9 @@ class PolicyGradient:
 
             if self._cfgs.model_cfgs.actor.lr is not None:
                 self._actor_critic.actor_scheduler.step()
+                self._actor_critic.reward_critic_scheduler.step()
+                if self._cfgs.algo_cfgs.use_cost:
+                    self._actor_critic.cost_critic_scheduler.step()
 
             self._logger.store(
                 {
@@ -367,9 +370,7 @@ class PolicyGradient:
 
         obs, info = self._env.reset(epoch * steps_per_epoch)
 
-        ue_id = 0
-        if epoch * steps_per_epoch % (480 * 700) > 0:
-            ue_id = 1
+        ue_id = ((epoch * steps_per_epoch) // (480 * 200)) % 2
 
         steps_time = 0
         for step in track(

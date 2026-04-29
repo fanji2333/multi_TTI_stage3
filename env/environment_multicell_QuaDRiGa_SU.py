@@ -693,15 +693,16 @@ class Environment:
             self.UEs.append(user)
             self.feedback_scheduler.log_user(user)
 
-        # TODO: 指定一个ue的id，后续传输只针对单ue仿真，其余ue只作为背景板
-        self.serve_ue_id = 0
-
         # 生成BS
         self.BSs: list[BS] = []
         for i in range(self._B):
             # temp = {"max P": self._max_P, "location": BS_pos[i], "shadow": shadow_BS[i]}
             self.BSs.append(BS(i, self._P, self._sigma, self._K_BS, self._Mt, self._Mr,
                                self._SRS_period, self._buffer_len, self.MCS_table))
+
+        # TODO: 指定一个ue的id，后续传输只针对单ue仿真，其余ue只作为背景板
+        self.serve_ue_id = 0
+        self.serve_bs = self.BSs[0]
 
         # 记录用户MCS选择分布情况
         self.user_MCS_distribution = []
@@ -748,8 +749,9 @@ class Environment:
             self.feedback_scheduler.reset(u)
 
         # TODO: 信道数据复用，若slot偏置开始从头循环，则切换到另一用户的信道来训练
-        if self._slot_bias % (480 * 700) > 0:
-            self.serve_ue_id = 1
+        # 考虑6用户总计200个ep，则每200个ep切换一次主用户
+        self.serve_ue_id = self._slot_bias // (480 * 200)
+        self.serve_bs = self.UEs[self.serve_ue_id].serve_BS
 
         # 各个BS整理信道信息
         # 只有SRS周期时BS才会更新信道
@@ -759,10 +761,10 @@ class Environment:
         # 将要返回给agent的状态打包
         # TODO: 只真正仿真一个BS的传输数据，其余BS只是背景板
         u_state = []
-        for u in self.BSs[0].serve_UEs:
-            tensor_ACK_list = torch.tensor(self.BSs[0].ACK_dict[u.id]).flatten()
-            tensor_update_delay = torch.Tensor([2 * self.BSs[0].CSI_update_delay / self._SRS_period - 1])
-            tensor_OLLA = torch.Tensor([self.BSs[0].OLLA[u.id]])
+        for u in self.serve_bs.serve_UEs:
+            tensor_ACK_list = torch.tensor(self.serve_bs.ACK_dict[u.id]).flatten()
+            tensor_update_delay = torch.Tensor([2 * self.serve_bs.CSI_update_delay / self._SRS_period - 1])
+            tensor_OLLA = torch.Tensor([self.serve_bs.OLLA[u.id]])
             u_state.append(torch.cat((tensor_ACK_list, tensor_update_delay, tensor_OLLA), dim=0).float())
 
         self.state = torch.stack(u_state, dim=0).to(self._device)
@@ -774,11 +776,11 @@ class Environment:
         if self._cfg.obs_normalize:
             if self.fix_channel:
                 origin_state = self.state
-                for u in self.BSs[0].serve_UEs:
-                    state[u.id] = self._obs_normalizer.normalize(self.state[u.id])
+                for u in self.serve_bs.serve_UEs:
+                    state[u.id % self._K] = self._obs_normalizer.normalize(self.state[u.id % self._K])
             else:
                 origin_state = self.state
-                state[self.serve_ue_id] = self._obs_normalizer.normalize(self.state[self.serve_ue_id])
+                state[self.serve_ue_id % self._K] = self._obs_normalizer.normalize(self.state[self.serve_ue_id % self._K])
             info['origin_state'] = origin_state
 
         return state, info
@@ -807,7 +809,7 @@ class Environment:
         OLLA_fix = self.process_action(action)
 
         # TODO: 尽管是多小区，但只需要对0号BS进行真实传输，其余BS只是用来生成干扰的
-        MCS_list, info = self.BSs[0].choose_mcs(self.MCS_table, self._mean_SINR_estimate, OLLA_fix)
+        MCS_list, info = self.serve_bs.choose_mcs(self.MCS_table, self._mean_SINR_estimate, OLLA_fix)
         postSINR_estimation_list = info["postSINR_estimation_list"]
         postSINR_estimation_raw_list = info["postSINR_estimation_raw_list"]
 
@@ -820,7 +822,7 @@ class Environment:
         user_BLER_ideal = []
         user_OLLA = []
         user_sinr = []
-        for i, u in enumerate(self.BSs[0].serve_UEs):
+        for i, u in enumerate(self.serve_bs.serve_UEs):
             bits, ACK, info = self.get_rate(u, MCS_list[i])
             ideal_bler = self.get_bler(10 ** (info["sinr"]/10), self.MCS_table[MCS_list[i]][0])
             delayed_feedback = self.feedback_scheduler.update(u, ACK)
@@ -842,7 +844,7 @@ class Environment:
 
         # 完美MCS选择
         ideal_MCS_list = []
-        for i, u in enumerate(self.BSs[0].serve_UEs):
+        for i, u in enumerate(self.serve_bs.serve_UEs):
             mcs = "1"
             for key, value in self.MCS_table.items():
                 if user_sinr[i] >= value[1]:
@@ -857,7 +859,7 @@ class Environment:
         # 奖励
         # 平均估计MCS选择
         mean_MCS_list = []
-        for i, u in enumerate(self.BSs[0].serve_UEs):
+        for i, u in enumerate(self.serve_bs.serve_UEs):
             mcs = self.MCS_table["1"][0]
             for key, value in self.MCS_table.items():
                 if postSINR_estimation_raw_list[i] >= value[1]:
@@ -896,10 +898,10 @@ class Environment:
         # 将要返回给agent的状态打包
         # TODO: 只真正仿真一个BS的传输数据，其余BS只是背景板
         u_state = []
-        for u in self.BSs[0].serve_UEs:
-            tensor_ACK_list = torch.tensor(self.BSs[0].ACK_dict[u.id]).flatten()
-            tensor_update_delay = torch.Tensor([2 * self.BSs[0].CSI_update_delay / self._SRS_period - 1])
-            tensor_OLLA = torch.Tensor([self.BSs[0].OLLA[u.id]])
+        for u in self.serve_bs.serve_UEs:
+            tensor_ACK_list = torch.tensor(self.serve_bs.ACK_dict[u.id]).flatten()
+            tensor_update_delay = torch.Tensor([2 * self.serve_bs.CSI_update_delay / self._SRS_period - 1])
+            tensor_OLLA = torch.Tensor([self.serve_bs.OLLA[u.id]])
             u_state.append(torch.cat((tensor_ACK_list, tensor_update_delay, tensor_OLLA), dim=0).float())
 
         self.state = torch.stack(u_state, dim=0).to(self._device)
@@ -924,11 +926,11 @@ class Environment:
         if self._cfg.obs_normalize:
             if self.fix_channel:
                 origin_state = self.state
-                for u in self.BSs[0].serve_UEs:
-                    state[u.id] = self._obs_normalizer.normalize(self.state[u.id])
+                for u in self.serve_bs.serve_UEs:
+                    state[u.id % self._K] = self._obs_normalizer.normalize(self.state[u.id % self._K])
             else:
                 origin_state = self.state
-                state[self.serve_ue_id] = self._obs_normalizer.normalize(self.state[self.serve_ue_id])
+                state[self.serve_ue_id % self._K] = self._obs_normalizer.normalize(self.state[self.serve_ue_id % self._K])
             info['origin_state'] = origin_state
         else:
             info['origin_state'] = self.state
@@ -979,7 +981,7 @@ class Environment:
         sinr_fix = action.tolist()
         if len(sinr_fix) == 1:
             temp = []
-            for u in self.BSs[0].serve_UEs:
+            for u in self.serve_bs.serve_UEs:
                 if u.id == self.serve_ue_id:
                     temp.append(sinr_fix[0])
                 else:

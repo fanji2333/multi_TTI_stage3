@@ -5,6 +5,8 @@ from agents.ActorCritic.base import Critic
 from omnisafe.typing import Activation, InitFunction
 from omnisafe.utils.model import build_mlp_network
 
+from utils.model import initialize_layer
+
 
 class VCritic(Critic):
 
@@ -51,6 +53,13 @@ class VCritic(Critic):
         self.heads = nn.ModuleList([
             nn.Linear(self._hidden_sizes[-1], 1) for _ in range(self._num_critics)
         ])
+        for head in self.heads:
+            # Critic 的输出层（预测单个 value 值），标准做法是 gain=1.0
+            initialize_layer(
+                init_function=self._weight_initialization_mode,
+                layer=head,
+                gain=1.0
+            )
 
     def forward(
         self,
