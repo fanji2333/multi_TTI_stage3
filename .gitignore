@@ -1,0 +1,22 @@
+# 默认忽略的文件
+/shelf/
+/workspace.xml
+# 基于编辑器的 HTTP 客户端请求
+/httpRequests/
+# Datasource local storage ignored files
+/dataSources/
+/dataSources.local.xml
+
+# 忽略 IDE 配置
+.idea/
+*.iml
+
+# 忽略你的中文文件夹
+信号/
+
+# 其他通用忽略
+__pycache__/
+*.pyc
+*.log
+*.tmp
+.DS_Store
