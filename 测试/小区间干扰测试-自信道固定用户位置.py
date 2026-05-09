@@ -2,23 +2,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from common.tools import get_dis
 
-Mt, Mr = 256, 4
-h_U, h_BS = 1.65, 15
-region_bound = 300
-fc = 6700   # MHz
-K = 2   # 单个cell内用户数
-B = 2   # 总cell数
-BS_pos = [(0, 0), (300, 0)]
-n_layer = 2
-n_stream = n_layer * K
-
-delta_theta = 5 / 180 * np.pi
-kai = 3.141592653589793
-
-noise0 = 10 ** (-174/10 - 3)              # 噪声功率(W/Hz)
-noise = noise0 * 30 * 1e3 * 12
-P = 10 ** (23.18/10 - 3)
-WMMSE_max_iteration = 5
 
 def get_largescale(dub, fc):
     beta_dB = 31.84 + 21.5 * np.log10(dub) + 19 * np.log10(fc * 1e-3)
@@ -33,6 +16,9 @@ def generate_gaussian_channel(Rr, Rt, n_layers):
 
     Mt = Rt.shape[0]
     Mr = Rr.shape[0]
+
+    # tr_t = np.trace(Rt)
+    # tr_r = np.trace(Rr)
 
     # 步骤1：特征值分解（对 Hermitian 矩阵用 eigh，确保数值稳定）
     eigenvalues_t, eigenvectors_t = np.linalg.eigh(Rt)
@@ -62,14 +48,32 @@ def generate_gaussian_channel(Rr, Rt, n_layers):
     combiner_equal_gain = lambda_sqrt[:n_layers]
 
     # 一次性生成所有随机数
-    h_real = np.random.randn(1, Mt, Mr)
-    h_imag = np.random.randn(1, Mt, Mr)
+    h_real = np.random.randn(Mt, Mr)
+    h_imag = np.random.randn(Mt, Mr)
     h0 = (h_real + 1j * h_imag) / np.sqrt(2)
 
     # 批量变换
     h = Rt_square @ h0 @ Rr_square
 
     return h, combiner_statistical, combiner_equal_gain
+
+Mt, Mr = 256, 4
+h_U, h_BS = 1.65, 15
+region_bound = 300
+fc = 6700   # MHz
+K = 2   # 单个cell内用户数
+B = 2   # 总cell数
+BS_pos = [(0, 0), (300, 0)]
+n_layer = 2
+n_stream = n_layer * K
+
+delta_theta = 15 / 180 * np.pi
+kai = 3.141592653589793
+
+noise0 = 10 ** (-174/10 - 3)              # 噪声功率(W/Hz)
+noise = noise0 * 30 * 1e3 * 12
+P = 10 ** (23.18/10 - 3)
+WMMSE_max_iteration = 5
 
 # 统计ICI
 ICI = {}
@@ -103,7 +107,7 @@ for b in range(B):
         for m in range(Mt):
             for n in range(Mt):
                 theta_bar = calculate_AOD(BS_pos[b][0], BS_pos[b][1], User_pos[k][0], User_pos[k][1])
-                Rt[b][k][m][n] = 1 / Mt * np.exp(
+                Rt[b][k][m][n] = np.exp(
                     -1j * kai * (m - n) * np.cos(theta_bar)) * np.sinc(
                     kai * (m - n) * delta_theta * np.sin(theta_bar))
 
@@ -115,7 +119,7 @@ for b in range(B):
         for m in range(Mr):
             for n in range(Mr):
                 theta_bar = calculate_AOD(BS_pos[b][0], BS_pos[b][1], User_pos[k][0], User_pos[k][1])
-                Rr[b][k][m][n] = 1 / Mr * np.exp(
+                Rr[b][k][m][n] = np.exp(
                     -1j * kai * (m - n) * np.cos(theta_bar)) * np.sinc(
                     kai * (m - n) * delta_theta * np.sin(theta_bar))
 
@@ -236,7 +240,7 @@ for sample in range(samples):
                 precoder_all[k] = precoder[:, k % 2 * n_layer: (k % 2 + 1) * n_layer]
                 combiner_all[k] = combiner[k % 2 * n_layer: (k % 2 + 1) * n_layer, :]
                 for l in range(n_layer):
-                    _, eigenvectors = np.linalg.eigh(Rr[(b, k)])
+                    _, eigenvectors = np.linalg.eigh(Rr[b][k])
                     v_all[(k, l)] = eigenvectors[:, -(l+1)]
 
     for k in range(K * B):
@@ -246,24 +250,27 @@ for sample in range(samples):
 
             for l in range(n_layer):
                 combiner = combiner_all[k][l, :]
+                # t_c = np.linalg.norm(combiner)
                 for v in BS_serve[b]:
                     for i in range(n_layer):
                         precoder = precoder_all[v][:, i]
                         # precoder归一化
                         precoder /= np.linalg.norm(precoder)
+                        # t_p = np.linalg.norm(precoder)
+                        # t_H = np.linalg.norm(Hs[(b, k)], 'fro') ** 2
                         tmp = ICI.get((k, l, b, v), [])
-                        tmp.append(np.linalg.norm(combiner @ Hs[(b, k)][0].conj().T @ precoder) ** 2)
+                        tmp.append(np.linalg.norm(combiner @ Hs[(b, k)].conj().T @ precoder) ** 2)
                         ICI[(k, l, b, v)] = tmp
                     if sample == 0:
                         ICI_mean_estimate[(k, l, b, v)] = 1 / Mt * (
-                                    (v_all[(k, l)].conj().T @ Rr[(b, k)] @ v_all[(k, l)]) * np.trace(
-                                Rt[(b, v)] @ Rt[(b, k)])).real
+                                    (v_all[(k, l)].conj().T @ Rr[b][k] @ v_all[(k, l)]) * np.trace(
+                                Rt[b][v] @ Rt[b][k])).real
                         ICI_mean[(k, l, b, v)] = 0
                         for i in range(n_layer):
                             precoder = precoder_all[v][:, i]
                             precoder /= np.linalg.norm(precoder)
-                            ICI_mean[(k, l, b, v)] += (combiner @ Rr[(b, k)] @ combiner.conj().T).real * (
-                                        precoder.conj().T @ Rt[(b, k)] @ precoder).real
+                            ICI_mean[(k, l, b, v)] += (combiner @ Rr[b][k] @ combiner.conj().T).real * (
+                                        precoder.conj().T @ Rt[b][k] @ precoder).real
                         ICI_mean[(k, l, b, v)] /= n_layer
 
 num_bins = 100  # 直方图的柱子数量
