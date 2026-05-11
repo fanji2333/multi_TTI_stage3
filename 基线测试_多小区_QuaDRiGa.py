@@ -219,9 +219,9 @@ class Environment:
 
         if self.fix_channel:
             # quadriga信道文件地址
-            self._quadriga_dir = "/home/fj24/25_8_Huawei_multiTTI/信道/QuaDriGa/quadriga_multicell_channel_out"
+            self._quadriga_dir = "/home/fj24/26_4_Huawei_multiTTI_stage3/信道/QuaDRiGa/quadriga_multicell_channel_out_separate_角度约束"
         else:
-            self._quadriga_dir = "/home/fj24/25_8_Huawei_multiTTI/信道/QuaDriGa/quadriga_UE_packs_test"
+            self._quadriga_dir = "/home/fj24/26_4_Huawei_multiTTI_stage3/信道/QuaDRiGa/quadriga_UE_packs_test"
         self._qg_src = QuadrigaMultiCellChannelSource(self._quadriga_dir)
 
         self.feedback_scheduler = FeedbackScheduler(self._D)
@@ -302,8 +302,6 @@ class Environment:
             bs.optimize_n_layer_exhaustive(self.MCS_table, self._mean_SINR_estimate)
             # bs.generate_precoder()
 
-        layer_sets = [u.n_layer for u in self.UEs]
-
         # TODO: 尽管是多小区，但只需要对0号BS进行真实传输，其余BS只是用来生成干扰的
         MCS_list, info = self.BSs[0].choose_mcs2(self.MCS_table, self._ceiling, self._mean_SINR_estimate, self.BSs)
         postSINR_estimation_list = info["postSINR_estimation_list"]
@@ -324,7 +322,9 @@ class Environment:
         user_sinr = []
         user_gain = []
         user_interference = []
+        user_interference_ICI = []
         user_interference_plus_noise = []
+        user_layer = []
         for i, u in enumerate(self.BSs[0].serve_UEs):
 
             bits, ACK, info = self.get_rate(u, str(MCS_list[i]))
@@ -344,7 +344,9 @@ class Environment:
             user_sinr.append(info["sinr"])
             user_gain.append(info["gain"])
             user_interference.append(info["interference"])
+            user_interference_ICI.append(info["interference_ICI"])
             user_interference_plus_noise.append(info["noise + interference"])
+            user_layer.append(u.n_layer)
             self.user_MCS_distribution[i][int(MCS_list[i]) - 1] += 1
 
         # tot_bps = tot_bits / (self._slot_t * 1e-3)
@@ -398,12 +400,14 @@ class Environment:
             'user_mcs_ideal': [int(mcs) for mcs in ideal_MCS_list],
             'user_gain': user_gain,
             'user_interference': user_interference,
+            'user_interference_ICI': user_interference_ICI,
             'user_interference_plus_noise': user_interference_plus_noise,
             'postsinr_estimation': postSINR_estimation_list,
             'postsinr_estimation_raw': postSINR_estimation_raw_list,
             'gain_estimation': gain_list,
             'interference_estimation': interference_list,
             'user_MCS_distribution': self.user_MCS_distribution,
+            'user_layer': user_layer,
         }
 
         state, cost = None, None
@@ -463,30 +467,41 @@ class Environment:
         sinr_list = []
         up_list = []
         down_list = []
+        down_ICI_list = []
+        IN_list = []
         for l in range(u.n_layer):
             up = 0
             down = 0
+            down_ICI = 0
             combiner = u.combiner[l, :]
+            # p_c = np.linalg.norm(combiner) ** 2
 
             for bs in self.BSs:
                 for v in bs.serve_UEs:
                     for i in range(v.n_layer):
                         precoding_vector = v.precoder[:, i]
+                        # p_p = np.linalg.norm(precoding_vector) ** 2
 
                         if v == u and i == l:
                             up = np.linalg.norm(combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
                         else:
-                            down += np.linalg.norm(combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
+                            if bs.id != u.serve_BS.id:
+                                down_ICI += np.linalg.norm(combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
+                            else:
+                                down += np.linalg.norm(combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
 
-            sinr_list.append(up / (down + self._sigma))
+            sinr_list.append(up / (down + down_ICI + self._sigma))
             up_list.append(up)
             down_list.append(down)
+            down_ICI_list.append(down_ICI)
+            IN_list.append(down + down_ICI + self._sigma)
         sinr = np.exp(np.mean(np.log(np.array(sinr_list))))  # 层间几何平均
 
         info = {
             "gain": up_list,
             "interference": down_list,
-            "noise + interference": [d + self._sigma for d in down_list],
+            "interference_ICI": down_ICI_list,
+            "noise + interference": IN_list,
         }
 
         return sinr, info
@@ -523,6 +538,7 @@ class Environment:
         info["sinr"] = sinr
         info["gain"] = [10 * np.log10(g) for g in sinr_info["gain"]]
         info["interference"] = [10 * np.log10(i) for i in sinr_info["interference"]]
+        info["interference_ICI"] = [10 * np.log10(i) for i in sinr_info["interference_ICI"]]
         info["noise + interference"] = [10 * np.log10(ni) for ni in sinr_info["noise + interference"]]
         # print(f"ACK/NACK: {ACK}")
 
@@ -588,11 +604,13 @@ class Evaluator:
         user_mcs_ideal = []
         user_gain = []
         user_interference = []
+        user_interference_ICI = []
         user_interference_plus_noise = []
         postsinr_estimation = []
         postsinr_estimation_raw = []
         gain_estimation = []
         interference_estimation = []
+        user_layer = []
         pic_save_path = self._save
         # ep_cost = torch.zeros(self._env.get_cost_num()).to(self._device)
         total_bits = 0
@@ -618,11 +636,13 @@ class Evaluator:
             user_mcs_ideal.append(info['user_mcs_ideal'])
             user_gain.append(info['user_gain'])
             user_interference.append(info['user_interference'])
+            user_interference_ICI.append(info['user_interference_ICI'])
             user_interference_plus_noise.append(info['user_interference_plus_noise'])
             postsinr_estimation.append(info['postsinr_estimation'])
             postsinr_estimation_raw.append(info['postsinr_estimation_raw'])
             gain_estimation.append(info['gain_estimation'])
             interference_estimation.append(info['interference_estimation'])
+            user_layer.append(info['user_layer'])
 
             total_bits += info['tot_bits']
 
@@ -659,6 +679,7 @@ class Evaluator:
             # "user_gain_ave": user_gain_ave,
             "user_interference": user_interference,
             # "user_interference_ave": user_interference_ave,
+            "user_interference_ICI": user_interference_ICI,
             "user_interference_plus_noise": user_interference_plus_noise,
             # "user_interference_plus_noise_ave": user_interference_plus_noise_ave,
             "postsinr_estimation": postsinr_estimation,
@@ -668,6 +689,7 @@ class Evaluator:
             # "gain_estimation_ave": gain_estimation_ave,
             # "interference_estimation_ave": interference_estimation_ave,
             # "postsinr_ave": postsinr_ave,
+            "user_layer": user_layer,
         }
 
         if need_plot:
@@ -684,6 +706,7 @@ class Evaluator:
             # plot(user_interference_ave, range(160), 'ave interference per UE per slot', pic_save_path)
             # plot(user_interference_plus_noise_ave, range(160), 'ave interference + noise per UE per slot', pic_save_path)
             # plot(postsinr_ave, range(160), 'ave postsinr estimation per UE per slot', pic_save_path)
+            plot(user_layer, slots, 'layer per UE per slot', pic_save_path)
             for i in range(len(user_MCS_distribution)):
                 plot_bar([x / step_num for x in user_MCS_distribution[i]], None,
                          f'user {i} MCS distribution', "MCS order", pic_save_path)
@@ -722,11 +745,10 @@ class Evaluator:
                 plt.legend()
                 # plt.ylim(-10,15)
                 plt.title(f"sinr condition of user {u}")
-                plt.show()
-
                 filename = f"sinr condition of user {u}.png"
                 filepath = os.path.join(pic_save_path, filename)
                 plt.savefig(filepath)
+                plt.show()
 
                 # plt.figure()
                 # for layer in range(self._cfgs.env_cfgs.N_layer):
@@ -783,7 +805,7 @@ if __name__ == '__main__':
 
     # 验证所提算法训练模型
     save = \
-            "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/QuaDRiGa/天花板"
+            "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/QuaDRiGa/角度约束/天花板"
     cfgs = get_default_kwargs_yaml('P3O')
     eval_obj = Evaluator(cfgs, save)
     data_dict = eval_obj.evaluate(T, need_plot=True)

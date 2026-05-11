@@ -40,7 +40,7 @@ def _pack_path(out_dir: str, bs_id_1based: int, ue_id_1based: int, pack_id: int)
     # 匹配 MATLAB 中 BSxx_UExx_packxxx.mat 的命名规则
     return os.path.join(out_dir, f"BS{bs_id_1based:02d}_UE{ue_id_1based:02d}_pack{pack_id:03d}.mat")
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=32)
 def _load_pack(out_dir: str, bs_id_1based: int, ue_id_1based: int, pack_id: int):
     fn = _pack_path(out_dir, bs_id_1based, ue_id_1based, pack_id)
     if not os.path.isfile(fn):
@@ -171,8 +171,8 @@ class BS:
                     eigenvalues_r, _ = np.linalg.eigh(self.Rr[u.id])
                     eigenvalues_r = eigenvalues_r[::-1]
                     u.combiner_eff_gain = eigenvalues_r[:u.max_layer]
-                    # if slots != 0:
-                    #     self.rho[u.id] = self.calculate_rho(self.H_bs_serve[u.id][0], self.H_bs_total[u.id][0])
+                    if slots != 0:
+                        self.rho[u.id] = self.calculate_rho(self.H_bs_serve[u.id][0], self.H_bs_total[u.id][0])
                     self.H_bs_serve[u.id] = self.H_bs_total[u.id]
                     self.H_l_bs_serve[u.id] = self.H_l_bs_total[u.id]
             self.CSI_update_delay = 0
@@ -286,7 +286,7 @@ class BS:
             # for l in range(u.n_layer):
             #     self.P_user[u.id].append(np.linalg.norm(precoder[uidx][:, l]) ** 2)
             for l in range(u.n_layer):
-                precoder[uidx][:, l] = self.P_user[u.id][l] / np.linalg.norm(precoder[uidx][:, l]) * precoder[uidx][:, l]
+                precoder[uidx][:, l] = np.sqrt(self.P_user[u.id][l]) / np.linalg.norm(precoder[uidx][:, l]) * precoder[uidx][:, l]
             u.precoder = precoder[uidx]
             u.combiner = combiner[uidx]
 
@@ -679,9 +679,9 @@ class Environment:
 
         if self.fix_channel:
             # quadriga信道文件地址
-            self._quadriga_dir = "/home/fj24/25_8_Huawei_multiTTI/信道/QuaDriGa/quadriga_multicell_channel_out"
+            self._quadriga_dir = "/home/fj24/26_4_Huawei_multiTTI_stage3/信道/QuaDRiGa/quadriga_multicell_channel_out_separate"
         else:
-            self._quadriga_dir = "/home/fj24/25_8_Huawei_multiTTI/信道/QuaDriGa/quadriga_UE_packs_test"
+            self._quadriga_dir = "/home/fj24/26_4_Huawei_multiTTI_stage3/信道/QuaDRiGa/quadriga_UE_packs_test"
         self._qg_src = QuadrigaMultiCellChannelSource(self._quadriga_dir)
 
         self.feedback_scheduler = FeedbackScheduler(self._D)
@@ -803,12 +803,12 @@ class Environment:
 
         # rank自适应并计算预编码
         for bs in self.BSs:
-            # 方案一：迭代寻找最优（速度快）
+            # 遍历寻找最优
             bs.optimize_n_layer_exhaustive(self.MCS_table, self._mean_SINR_estimate)
 
         OLLA_fix = self.process_action(action)
 
-        # TODO: 尽管是多小区，但只需要对0号BS进行真实传输，其余BS只是用来生成干扰的
+        # TODO: 尽管是多小区，但只需要对选定的BS进行真实传输，其余BS只是用来生成干扰的
         MCS_list, info = self.serve_bs.choose_mcs(self.MCS_table, self._mean_SINR_estimate, OLLA_fix)
         postSINR_estimation_list = info["postSINR_estimation_list"]
         postSINR_estimation_raw_list = info["postSINR_estimation_raw_list"]
@@ -822,6 +822,7 @@ class Environment:
         user_BLER_ideal = []
         user_OLLA = []
         user_sinr = []
+        user_layer = []
         for i, u in enumerate(self.serve_bs.serve_UEs):
             bits, ACK, info = self.get_rate(u, MCS_list[i])
             ideal_bler = self.get_bler(10 ** (info["sinr"]/10), self.MCS_table[MCS_list[i]][0])
@@ -840,6 +841,7 @@ class Environment:
             user_BLER_ideal.append(u.BLER_ideal)
             user_OLLA.append(u.serve_BS.OLLA[u.id])
             user_sinr.append(info["sinr"])
+            user_layer.append(u.n_layer)
             self.user_MCS_distribution[i][int(MCS_list[i])-1] += 1
 
         # 完美MCS选择
@@ -919,6 +921,7 @@ class Environment:
             'postsinr_estimation': postSINR_estimation_list,
             'postsinr_estimation_raw': postSINR_estimation_raw_list,
             'user_MCS_distribution': self.user_MCS_distribution,
+            'user_layer': user_layer,
         }
 
         state = self.state

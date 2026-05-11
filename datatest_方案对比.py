@@ -53,7 +53,7 @@ linestyles = ['-', '--', '-.', ':', '-']
 # markers = ['o', 's', '^', 'D', '*']
 
 T = 160*10
-window_size = 40
+window_size = 1
 throughput = [[] for _ in range(len(legends))]
 BLER = [[] for _ in range(len(legends))]
 user_bits = [[] for _ in range(len(legends))]
