@@ -1,6 +1,7 @@
 import torch
 from torch import optim
 from omnisafe.utils.config import ModelConfig
+from torch.optim.lr_scheduler import ConstantLR, LinearLR
 
 import agents.ActorCritic.actor_critic as ac
 
@@ -34,6 +35,14 @@ class ConstraintActorCritic(ac.ActorCritic):
                 self.cost_critic.parameters(),
                 lr=model_cfgs.critic.lr,
             )
+            if model_cfgs.linear_lr_decay:
+                self.cost_critic_scheduler = LinearLR(
+                    self.cost_critic_optimizer,
+                    start_factor=1.0,
+                    end_factor=0.0,
+                    total_iters=epochs,
+                    verbose=True,
+                )
 
     def step(
         self,

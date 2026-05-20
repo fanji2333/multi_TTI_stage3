@@ -7,6 +7,17 @@
 /dataSources/
 /dataSources.local.xml
 
+# 忽略 IDE 配置
+.idea/
+*.iml
+
+# 忽略你的中文文件夹
 信道/
 *.docx
-.idea/
+
+# 其他通用忽略
+__pycache__/
+*.pyc
+*.log
+*.tmp
+.DS_Store

@@ -118,6 +118,7 @@ class Evaluator:
         user_mcs_ideal = []
         postsinr_estimation = []
         postsinr_estimation_raw = []
+        user_layer = []
         pic_save_path = os.path.dirname(os.path.dirname(self._save))
         ep_cost = torch.zeros(self._env.get_cost_num()).to(self._device)
         total_bits = 0
@@ -170,6 +171,7 @@ class Evaluator:
             postsinr_estimation.append(info['postsinr_estimation'])
             postsinr_estimation_raw.append(info['postsinr_estimation_raw'])
             total_bits += info['tot_bits']
+            user_layer.append(info['user_layer'])
 
         # sinr_condition = info['sinr_condition']
         # plot_hist(sinr_condition[0], 'MRT user 0 gain condition', 'gain/dB')
@@ -195,6 +197,7 @@ class Evaluator:
             "user_mcs_ideal": user_mcs_ideal,
             "postsinr_estimation": postsinr_estimation,
             "postsinr_estimation_raw": postsinr_estimation_raw,
+            "user_layer": user_layer,
         }
 
         data_file_name = "eval_data.json"

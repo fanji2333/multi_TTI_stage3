@@ -99,7 +99,7 @@ defaults:
   # model configurations
   model_cfgs:
     # weight initialization mode
-    weight_initialization_mode: "kaiming_uniform"
+    weight_initialization_mode: "orthogonal"
     # actor type, options: gaussian, gaussian_learning, binary_learning
     actor_type: gaussian_learning
     # linear learning rate decay
