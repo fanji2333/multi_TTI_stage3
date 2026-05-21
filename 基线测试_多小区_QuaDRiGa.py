@@ -26,7 +26,7 @@ class myBS(BS):
         postSINR_estimation_raw_list = []
         gain_list = []
         interference_list = []
-        for u in self.serve_UEs:
+        for i_u, u in enumerate(self.serve_UEs):
             gain_list.append([])
             interference_list.append([])
             if not ceiling:
@@ -51,8 +51,8 @@ class myBS(BS):
                             if bs_id != self.id:
                                 mu_loss += (u.large_scale_fadings[bs_id] ** 2) * self.P
                         sinr_estimate_list.append(gain / (mu_loss + self.noise))
-                        gain_list[u.id].append(10 * np.log10(gain))
-                        interference_list[u.id].append(10 * np.log10(mu_loss))
+                        gain_list[i_u].append(10 * np.log10(gain))
+                        interference_list[i_u].append(10 * np.log10(mu_loss))
                     sinr_estimate = np.exp(np.mean(np.log(np.array(sinr_estimate_list))))       # 层间几何平均
                     sinr_estimate = 10* np.log10(sinr_estimate)
                 else:
@@ -62,8 +62,8 @@ class myBS(BS):
                     mu_loss = self.mu_loss_per_user_dB * (len(self.serve_UEs) - 1)
                     layer_loss = 10 * np.log10(u.n_layer)
                     sinr_estimate = sinr_estimate - mu_loss - layer_loss
-                    gain_list[u.id].append(10 * np.log10(gain))
-                    interference_list[u.id].append(mu_loss)
+                    gain_list[i_u].append(10 * np.log10(gain))
+                    interference_list[i_u].append(mu_loss)
 
                 postSINR_estimation_raw_list.append(sinr_estimate)
                 sinr_estimate += self.OLLA[u.id]
@@ -219,7 +219,7 @@ class Environment:
 
         if self.fix_channel:
             # quadriga信道文件地址
-            self._quadriga_dir = "/home/fj24/26_4_Huawei_multiTTI_stage3/信道/QuaDRiGa/quadriga_multicell_channel_out_separate_角度约束"
+            self._quadriga_dir = "/home/fj24/26_4_Huawei_multiTTI_stage3/信道/QuaDRiGa/quadriga_multicell_channel_out_separate"
         else:
             self._quadriga_dir = "/home/fj24/26_4_Huawei_multiTTI_stage3/信道/QuaDRiGa/quadriga_UE_packs_test"
         self._qg_src = QuadrigaMultiCellChannelSource(self._quadriga_dir)
@@ -242,7 +242,7 @@ class Environment:
 
         # 记录用户MCS选择分布情况
         self.user_MCS_distribution = []
-        for i in range(self._K):
+        for i in range(self._K_all):
             self.user_MCS_distribution.append([0] * len(self.MCS_table.keys()))
 
         self._slots = 0
@@ -302,15 +302,6 @@ class Environment:
             bs.optimize_n_layer_exhaustive(self.MCS_table, self._mean_SINR_estimate)
             # bs.generate_precoder()
 
-        # TODO: 尽管是多小区，但只需要对0号BS进行真实传输，其余BS只是用来生成干扰的
-        MCS_list, info = self.BSs[0].choose_mcs2(self.MCS_table, self._ceiling, self._mean_SINR_estimate, self.BSs)
-        postSINR_estimation_list = info["postSINR_estimation_list"]
-        postSINR_estimation_raw_list = info["postSINR_estimation_raw_list"]
-        gain_list = info["gain_list"]
-        interference_list = info["interference_list"]
-
-        # print(f"MCS_list: {MCS_list}")
-
         # 根据调度结果更新用户数据队列，记录这一时隙内总发送比特数，并考察时延约束违反情况
         tot_bits = 0
         success_users = self._K
@@ -325,43 +316,48 @@ class Environment:
         user_interference_ICI = []
         user_interference_plus_noise = []
         user_layer = []
-        for i, u in enumerate(self.BSs[0].serve_UEs):
-
-            bits, ACK, info = self.get_rate(u, str(MCS_list[i]))
-            ideal_bler = self.get_bler(10 ** (info["sinr"] / 10), self.MCS_table[MCS_list[i]][0])
-            delayed_feedback = self.feedback_scheduler.update(u, ACK)
-            u.serve_BS.update_ACK(u, delayed_feedback, self._OLLA_scheme)
-            u.update_BLER(ACK, self._slots, ideal_bler)
-            # u.update_BLER(ACK, self._slots)
-
-            # 记录各类参数
-            tot_bits += bits / self._K
-            user_bits.append(bits)
-            ACK_list.append(ACK)
-            user_BLER.append(u.BLER)
-            user_BLER_ideal.append(u.BLER_ideal)
-            user_OLLA.append(u.serve_BS.OLLA[u.id])
-            user_sinr.append(info["sinr"])
-            user_gain.append(info["gain"])
-            user_interference.append(info["interference"])
-            user_interference_ICI.append(info["interference_ICI"])
-            user_interference_plus_noise.append(info["noise + interference"])
-            user_layer.append(u.n_layer)
-            self.user_MCS_distribution[i][int(MCS_list[i]) - 1] += 1
-
-        # tot_bps = tot_bits / (self._slot_t * 1e-3)
-        # user_bps = [ele / (self._slot_t * 1e-3) for ele in user_bits]
-
-        # 完美MCS选择
+        postSINR_estimation = []
+        postSINR_estimation_raw = []
+        gain_list = []
+        interference_list = []
         ideal_MCS_list = []
-        for i, u in enumerate(self.BSs[0].serve_UEs):
-            mcs = "1"
-            for key, value in self.MCS_table.items():
-                if user_sinr[i] >= value[1]:
-                    mcs = key
-                else:
-                    break
-            ideal_MCS_list.append(mcs)
+        all_MCS_list = []
+        for bs in self.BSs:
+            MCS_list, info = bs.choose_mcs2(self.MCS_table, self._ceiling, self._mean_SINR_estimate, self.BSs)
+            postSINR_estimation += info["postSINR_estimation_list"]
+            postSINR_estimation_raw += info["postSINR_estimation_raw_list"]
+            gain_list += info["gain_list"]
+            interference_list += info["interference_list"]
+            all_MCS_list += MCS_list
+
+            for i, u in enumerate(bs.serve_UEs):
+                bits, ACK, info = self.get_rate(u, MCS_list[i])
+                ideal_bler = self.get_bler(10 ** (info["sinr"] / 10), self.MCS_table[MCS_list[i]][0])
+                delayed_feedback = self.feedback_scheduler.update(u, ACK)
+                u.serve_BS.update_ACK(u, delayed_feedback, self._OLLA_scheme)
+                u.update_BLER(ACK, self._slots, ideal_bler)
+
+                # 记录各类参数
+                tot_bits += bits / self._K
+                user_bits.append(bits)
+                ACK_list.append(ACK)
+                user_BLER.append(u.BLER)
+                user_BLER_ideal.append(u.BLER_ideal)
+                user_OLLA.append(u.serve_BS.OLLA[u.id])
+                user_sinr.append(info["sinr"])
+                user_gain.append(info["gain"])
+                user_interference.append(info["interference"])
+                user_interference_ICI.append(info["interference_ICI"])
+                user_interference_plus_noise.append(info["noise + interference"])
+                user_layer.append(u.n_layer)
+                self.user_MCS_distribution[u.id][int(MCS_list[i]) - 1] += 1
+                mcs = "1"
+                for key, value in self.MCS_table.items():
+                    if info["sinr"] >= value[1]:
+                        mcs = key
+                    else:
+                        break
+                ideal_MCS_list.append(mcs)
 
         # 奖励
         # 直接以总传输bit数为奖励
@@ -396,14 +392,14 @@ class Environment:
             'user_BLER_ideal': user_BLER_ideal,
             'user_OLLA': user_OLLA,
             'user_sinr': user_sinr,
-            'user_mcs': [int(mcs) for mcs in MCS_list],
+            'user_mcs': [int(mcs) for mcs in all_MCS_list],
             'user_mcs_ideal': [int(mcs) for mcs in ideal_MCS_list],
             'user_gain': user_gain,
             'user_interference': user_interference,
             'user_interference_ICI': user_interference_ICI,
             'user_interference_plus_noise': user_interference_plus_noise,
-            'postsinr_estimation': postSINR_estimation_list,
-            'postsinr_estimation_raw': postSINR_estimation_raw_list,
+            'postsinr_estimation': postSINR_estimation,
+            'postsinr_estimation_raw': postSINR_estimation_raw,
             'gain_estimation': gain_list,
             'interference_estimation': interference_list,
             'user_MCS_distribution': self.user_MCS_distribution,
@@ -805,7 +801,7 @@ if __name__ == '__main__':
 
     # 验证所提算法训练模型
     save = \
-            "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/QuaDRiGa/角度约束/天花板"
+            "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/QuaDRiGa/角度约束/SINR"
     cfgs = get_default_kwargs_yaml('P3O')
     eval_obj = Evaluator(cfgs, save)
     data_dict = eval_obj.evaluate(T, need_plot=True)

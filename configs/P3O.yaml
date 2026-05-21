@@ -175,9 +175,9 @@ defaults:
     # 是否使用SINR均值老化动态估计
     mean_SINR_estimate: True
     # 是否L2获取L1实际预编码
-    ceiling: True
+    ceiling: False
     # 是否传统OLLA机制
-    OLLA: False
+    OLLA: True
     # 是否读取固定信道实现
     fix_channel: True
     # normalize reward

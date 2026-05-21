@@ -48,14 +48,15 @@ MCS_table = {
         }
 
 # 方案数据
-method = "Multi-Cell Ceiling"
-save = "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/QuaDRiGa/角度约束/天花板"
+method = "Multi-Cell SINR"
+save = "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/QuaDRiGa/角度约束/SINR"
 data_file_name = "eval_data.json"
 data_file_path = os.path.join(save, data_file_name)
 pic_save_path = os.path.dirname(os.path.dirname(save))
 
 T = 160*10
 window_size = 400
+U = 6
 
 # 读取JSON文件
 with open(data_file_path, "r", encoding="utf-8") as f:
@@ -64,18 +65,20 @@ with open(data_file_path, "r", encoding="utf-8") as f:
 # 记录数据
 throughput = data_dict["slot_bits"]
 BLER = data_dict["user_BLER"]
-mcs = [[] for _ in range(2)]
-mcs_ideal = [[] for _ in range(2)]
-mcs_to_SINR = [[] for _ in range(2)]
-mcs_ideal_to_SINR = [[] for _ in range(2)]
-SINR = [[] for _ in range(2)]
-SINR_estimate = [[] for _ in range(2)]
-SINR_estimate_raw = [[] for _ in range(2)]
-user_layer = [[] for _ in range(2)]
-gain = [[] for _ in range(2)]
-interference = [[] for _ in range(2)]
-interference_ICI = [[] for _ in range(2)]
-for u in range(2):
+mcs = [[] for _ in range(U)]
+mcs_ideal = [[] for _ in range(U)]
+mcs_to_SINR = [[] for _ in range(U)]
+mcs_ideal_to_SINR = [[] for _ in range(U)]
+SINR = [[] for _ in range(U)]
+SINR_estimate = [[] for _ in range(U)]
+SINR_estimate_raw = [[] for _ in range(U)]
+user_layer = [[] for _ in range(U)]
+gain = [[] for _ in range(U)]
+interference = [[] for _ in range(U)]
+interference_ICI = [[] for _ in range(U)]
+gain_est = [[] for _ in range(U)]
+interference_est = [[] for _ in range(U)]
+for u in range(U):
     mcs[u] = [m[u] for m in data_dict['user_mcs']]
     mcs_to_SINR[u] = [MCS_table[str(m)][1] for m in mcs[u]]
     mcs_ideal[u] = [m[u] for m in data_dict['user_mcs_ideal']]
@@ -87,6 +90,8 @@ for u in range(2):
     gain[u] = [m[u] for m in data_dict["user_gain"]]
     interference[u] = [m[u] for m in data_dict["user_interference"]]
     interference_ICI[u] = [m[u] for m in data_dict["user_interference_ICI"]]
+    gain_est[u] = [m[u] for m in data_dict["gain_estimation"]]
+    interference_est[u] = [m[u] for m in data_dict["interference_estimation"]]
 
 plt.figure()
 smoothed_throughput = moving_average(throughput, window_size)
@@ -99,7 +104,7 @@ plt.title(f"{method} Throughput")
 plt.show()
 
 
-for u in range(2):
+for u in range(U):
     plt.figure()
     plt.plot(range(T), mcs_to_SINR[u], label="real MCS")
     plt.plot(range(T), mcs_ideal_to_SINR[u], "--", label="ideal MCS")
@@ -138,49 +143,72 @@ for u in range(2):
     plt.show()
 
     plt.figure()
-    plt.plot(range(T), [m[0] for m in gain[u]], label="layer 1")
+    plt.plot(range(T), [m[0]+30 for m in gain[u]], label="layer 1")
     valid_indices = []
     filtered_data2 = []
     for i, m in enumerate(gain[u]):
         if len(m) == 2:
             valid_indices.append(i)
-            filtered_data2.append(m[1])
+            filtered_data2.append(m[1]+30)
     plt.plot(valid_indices, filtered_data2, label="layer 2")
     plt.legend()
     plt.xlabel("TTI")
-    plt.ylabel("dB")
+    plt.ylabel("dBm")
     plt.title(f"{method} gain for user {u}")
     plt.grid(True)
     plt.show()
 
     plt.figure()
-    plt.plot(range(T), [m[0] for m in interference[u]], label="layer 1")
+    plt.plot(range(T), [m[0]+30 for m in interference[u]], label="layer 1")
     valid_indices = []
     filtered_data2 = []
     for i, m in enumerate(interference[u]):
         if len(m) == 2:
             valid_indices.append(i)
-            filtered_data2.append(m[1])
+            filtered_data2.append(m[1]+30)
     plt.plot(valid_indices, filtered_data2, label="layer 2")
     plt.legend()
     plt.xlabel("TTI")
-    plt.ylabel("dB")
+    plt.ylabel("dBm")
     plt.title(f"{method} interference for user {u}")
     plt.grid(True)
     plt.show()
 
     plt.figure()
-    plt.plot(range(T), [m[0] for m in interference_ICI[u]], label="layer 1")
+    plt.plot(range(T), [m[0]+30 for m in interference_ICI[u]], label="layer 1")
     valid_indices = []
     filtered_data2 = []
     for i, m in enumerate(interference_ICI[u]):
         if len(m) == 2:
             valid_indices.append(i)
-            filtered_data2.append(m[1])
+            filtered_data2.append(m[1]+30)
     plt.plot(valid_indices, filtered_data2, label="layer 2")
     plt.legend()
     plt.xlabel("TTI")
-    plt.ylabel("dB")
+    plt.ylabel("dBm")
     plt.title(f"{method} interference ICI for user {u}")
+    plt.grid(True)
+    plt.show()
+
+    plt.figure()
+    plt.plot(range(T), [m[0] + 30 for m in gain[u]], label="layer 1 real gain")
+    plt.plot(range(T), [m[0] + 30 for m in gain_est[u]], label="layer 1 gain estimated")
+    plt.legend()
+    plt.xlabel("TTI")
+    plt.ylabel("dBm")
+    plt.title(f"{method} gain comparison for user {u}")
+    plt.grid(True)
+    plt.show()
+
+    plt.figure()
+    iui = [10 ** (m[0] / 10) for m in interference[u]]
+    ici = [10 ** (m[0] / 10) for m in interference_ICI[u]]
+    real_i = [10 * np.log10(iui[i] + ici[i]) + 30 for i in range(len(iui))]
+    plt.plot(range(T), real_i, label="layer 1 real interference")
+    plt.plot(range(T), [m[0] + 30 for m in interference_est[u]], label="layer 1 interference estimated")
+    plt.legend()
+    plt.xlabel("TTI")
+    plt.ylabel("dBm")
+    plt.title(f"{method} interference comparison for user {u}")
     plt.grid(True)
     plt.show()
