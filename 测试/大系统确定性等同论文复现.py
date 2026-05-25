@@ -21,7 +21,7 @@ def main():
     # 1. 系统基础参数设置
     # ==========================
     M = 32  # 基站发射天线数
-    K = 8  # 单天线用户数
+    K = 4  # 单天线用户数
     T_slots = 500  # 为了让CDF更有统计意义，将仿真次数提升至500
     SNR_dB = 10  # 发射端信噪比 (dB)
     rho = 10 ** (SNR_dB / 10)
@@ -153,7 +153,7 @@ def main():
     print("Plotting results...")
 
     # 这里我们展示用户0和用户1的情况，如果要展示所有用户可以写成 plot_users = range(K)
-    plot_users = [0, 1]
+    plot_users = range(K)
 
     for u in plot_users:
         # 每个用户单独一张图，包含两个子图 (1行2列)

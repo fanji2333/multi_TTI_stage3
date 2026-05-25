@@ -139,7 +139,7 @@ class Evaluator:
             #         )
             act = []
             with torch.no_grad():
-                for ue_id in range(self._cfgs.env_cfgs.U):
+                for ue_id in self._env.get_user_ids():
                     if self._actor is not None:
                         act.append(
                             self._actor.predict(
