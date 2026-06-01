@@ -173,16 +173,24 @@ class BS:
             for u in UEs:
                 self.H_l_bs_total[u.id], Hs = self.separate_large_scale_fading(H[u.id])
                 u.large_scale_fadings[self.id] = self.H_l_bs_total[u.id]
-                u.Rr[self.id], u.Rt[self.id] = self.estimate_corr_matrix(Hs)
+                Rr, Rt = self.estimate_corr_matrix(Hs)
+                if self.id not in u.Rr:
+                    u.Rr[self.id] = BiasCorrectedEWMA(alpha=0.3, init=Rr)
+                else:
+                    u.Rr[self.id].update(Rr)
+                if self.id not in u.Rt:
+                    u.Rt[self.id] = BiasCorrectedEWMA(alpha=0.3, init=Rt)
+                else:
+                    u.Rt[self.id].update(Rt)
                 if u in self.serve_UEs:
-                    self.Rr[u.id], self.Rt[u.id] = u.Rr[self.id], u.Rt[self.id]
+                    self.Rr[u.id], self.Rt[u.id] = u.Rr[self.id].get_avg(), u.Rt[self.id].get_avg()
                     eigenvalues_r, eigenvectors_r = np.linalg.eigh(self.Rr[u.id])
                     eigenvalues_r = eigenvalues_r[::-1]
                     eigenvectors_r = eigenvectors_r[:, ::-1]
                     u.combiner_eff_gain = eigenvalues_r[:u.max_layer]
                     u.v_combiner = eigenvectors_r[:, :u.max_layer]
                     if slots != 0:
-                        self.rho[u.id] = self.calculate_rho(self.H_bs_serve[u.id][0], self.H_bs_total[u.id][0])
+                        self.rho[u.id].update(self.calculate_rho(self.H_bs_serve[u.id][0], self.H_bs_total[u.id][0]))
                     self.H_bs_serve[u.id] = self.H_bs_total[u.id]
                     self.H_l_bs_serve[u.id] = self.H_l_bs_total[u.id]
             self.CSI_update_delay = 0
@@ -342,7 +350,7 @@ class BS:
         if mean_SINR_estimate:
             sinr_estimate_list = []
             for l in range(u.n_layer):
-                gain = ((self.rho[u.id] ** (2 * self.CSI_update_delay)) * (self.H_l_bs_serve[u.id] ** 2)
+                gain = ((self.rho[u.id].get_avg() ** (2 * self.CSI_update_delay)) * (self.H_l_bs_serve[u.id] ** 2)
                         * self.P_user[u.id][l] * u.combiner_eff_gain[l] * self.Mt)
                 interference = 0
                 for v in self.serve_UEs:
@@ -356,7 +364,7 @@ class BS:
                                              * np.trace(self.Rt[v.id] @ self.Rt[u.id]).real / self.Mt)
                         # interference += (self.P_user[v.id][i] * v.combiner_eff_gain[i]
                         #                  * np.trace(self.Rt[v.id] @ self.Rt[u.id]).real / self.Mt)
-                mu_loss = ((1 - self.rho[u.id] ** (2 * self.CSI_update_delay)) * (self.H_l_bs_serve[u.id] ** 2)
+                mu_loss = ((1 - self.rho[u.id].get_avg() ** (2 * self.CSI_update_delay)) * (self.H_l_bs_serve[u.id] ** 2)
                            * interference)
                 for bs_id, hl in u.large_scale_fadings.items():
                     if bs_id != self.id:
@@ -462,7 +470,7 @@ class BS:
         self.serve_UEs.append(u)
         self.ACK_dict[u.id] = [1 for _ in range(self.buffer_len)]
         self.OLLA[u.id] = 0
-        self.rho[u.id] = 0.9966
+        self.rho[u.id] = BiasCorrectedEWMA(alpha=0.3, init=0.9966)
 
     def update_ACK(self, u: User, ack, OLLA_scheme):
         self.ACK_dict[u.id].append(ack)

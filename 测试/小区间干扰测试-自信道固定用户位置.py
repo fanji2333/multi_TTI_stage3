@@ -79,7 +79,7 @@ WMMSE_max_iteration = 5
 ICI = {}
 ICI_mean = {}
 ICI_mean_estimate = {}
-samples = 10000   #随机实现次数
+samples = 1000   #随机实现次数
 
 # 随机初始化用户位置
 User_pos = []
@@ -155,84 +155,84 @@ for sample in range(samples):
             precoder = H_equal.conj().T @ inv
             precoder = np.sqrt(P / np.trace(precoder.conj().T @ precoder)) * precoder
 
-            # WMMSE迭代
-            combiner = np.zeros((Mr, n_stream), dtype=np.complex128)
-            for iteration in range(WMMSE_max_iteration):
-                receivers = {}
-                mse_weights = {}
-
-                # 更新MMSE接收机
-                for k in range(K * B):
-                    if k not in BS_serve[b]:
-                        continue
-
-                    H_user = H[(b, k)]
-
-                    W_user = precoder[:, k % 2 * n_layer: (k % 2 + 1) * n_layer]
-
-                    # 接收信号协方差
-                    R_yy = noise * np.eye(Mr, dtype=complex)
-                    for v in BS_serve[b]:
-                        if v != k:
-                            W_other = precoder[:, v % 2 * n_layer: (v % 2 + 1) * n_layer]
-                            R_yy += H_user.conj().T @ W_other @ W_other.conj().T @ H_user
-
-                    # MMSE接收机
-                    try:
-                        signal = H_user.conj().T @ W_user
-                        G_mmse = np.linalg.inv(R_yy + 1e-10 * np.eye(Mr)) @ signal
-                        receivers[k % 2] = G_mmse
-                        combiner[:, k % 2 * n_layer: (k % 2 + 1) * n_layer] = G_mmse
-
-                        # MSE权重
-                        I = np.eye(n_layer, dtype=complex)
-                        MSE_k = I - G_mmse.conj().T @ signal - signal.conj().T @ G_mmse + \
-                                G_mmse.conj().T @ R_yy @ G_mmse
-                        mse_weights[k % 2] = np.linalg.inv(MSE_k + 1e-10 * I)
-                    except:
-                        pass
-
-                # 更新预编码器
-                for k in range(K * B):
-                    if k not in BS_serve[b]:
-                        continue
-
-                    H_user = H[(b, k)]
-
-                    # 构建干扰矩阵
-                    A_m = 1e-10 * np.eye(Mt, dtype=complex)
-                    for v in BS_serve[b]:
-                        if v != k:
-                            H_j = H[(b, v)]
-                            G_j = receivers[v % 2]
-                            U_j = mse_weights[v % 2]
-                            A_m += H_j @ G_j @ U_j @ G_j.conj().T @ H_j.conj().T
-
-                    # 更新预编码
-                    try:
-                        B_m = H_user @ receivers[k % 2] @ mse_weights[k % 2]
-                        W_new = np.linalg.inv(A_m) @ B_m
-
-                        # 功率约束
-                        power = np.trace(W_new @ W_new.conj().T).real
-                        if power > 0:
-                            n_scheduled = K
-                            power_budget = P / max(n_scheduled, 1)
-                            W_new = W_new * np.sqrt(power_budget / power)
-
-                        precoder[:, k % 2 * n_layer: (k % 2 + 1) * n_layer] = W_new
-                    except:
-                        pass
-
-            # 功率归一化
-            precoder = np.sqrt(P / np.trace(precoder.conj().T @ precoder)) * precoder
-
-            # combiner归一化
-            for s in range(n_stream):
-                combiner[:, s] = combiner[:, s] / np.linalg.norm(combiner[:, s])
-
-            # 我仿真时用的combiner还需要共轭转置才适配
-            combiner = combiner.conj().T
+            # # WMMSE迭代
+            # combiner = np.zeros((Mr, n_stream), dtype=np.complex128)
+            # for iteration in range(WMMSE_max_iteration):
+            #     receivers = {}
+            #     mse_weights = {}
+            #
+            #     # 更新MMSE接收机
+            #     for k in range(K * B):
+            #         if k not in BS_serve[b]:
+            #             continue
+            #
+            #         H_user = H[(b, k)]
+            #
+            #         W_user = precoder[:, k % 2 * n_layer: (k % 2 + 1) * n_layer]
+            #
+            #         # 接收信号协方差
+            #         R_yy = noise * np.eye(Mr, dtype=complex)
+            #         for v in BS_serve[b]:
+            #             if v != k:
+            #                 W_other = precoder[:, v % 2 * n_layer: (v % 2 + 1) * n_layer]
+            #                 R_yy += H_user.conj().T @ W_other @ W_other.conj().T @ H_user
+            #
+            #         # MMSE接收机
+            #         try:
+            #             signal = H_user.conj().T @ W_user
+            #             G_mmse = np.linalg.inv(R_yy + 1e-10 * np.eye(Mr)) @ signal
+            #             receivers[k % 2] = G_mmse
+            #             combiner[:, k % 2 * n_layer: (k % 2 + 1) * n_layer] = G_mmse
+            #
+            #             # MSE权重
+            #             I = np.eye(n_layer, dtype=complex)
+            #             MSE_k = I - G_mmse.conj().T @ signal - signal.conj().T @ G_mmse + \
+            #                     G_mmse.conj().T @ R_yy @ G_mmse
+            #             mse_weights[k % 2] = np.linalg.inv(MSE_k + 1e-10 * I)
+            #         except:
+            #             pass
+            #
+            #     # 更新预编码器
+            #     for k in range(K * B):
+            #         if k not in BS_serve[b]:
+            #             continue
+            #
+            #         H_user = H[(b, k)]
+            #
+            #         # 构建干扰矩阵
+            #         A_m = 1e-10 * np.eye(Mt, dtype=complex)
+            #         for v in BS_serve[b]:
+            #             if v != k:
+            #                 H_j = H[(b, v)]
+            #                 G_j = receivers[v % 2]
+            #                 U_j = mse_weights[v % 2]
+            #                 A_m += H_j @ G_j @ U_j @ G_j.conj().T @ H_j.conj().T
+            #
+            #         # 更新预编码
+            #         try:
+            #             B_m = H_user @ receivers[k % 2] @ mse_weights[k % 2]
+            #             W_new = np.linalg.inv(A_m) @ B_m
+            #
+            #             # 功率约束
+            #             power = np.trace(W_new @ W_new.conj().T).real
+            #             if power > 0:
+            #                 n_scheduled = K
+            #                 power_budget = P / max(n_scheduled, 1)
+            #                 W_new = W_new * np.sqrt(power_budget / power)
+            #
+            #             precoder[:, k % 2 * n_layer: (k % 2 + 1) * n_layer] = W_new
+            #         except:
+            #             pass
+            #
+            # # 功率归一化
+            # precoder = np.sqrt(P / np.trace(precoder.conj().T @ precoder)) * precoder
+            #
+            # # combiner归一化
+            # for s in range(n_stream):
+            #     combiner[:, s] = combiner[:, s] / np.linalg.norm(combiner[:, s])
+            #
+            # # 我仿真时用的combiner还需要共轭转置才适配
+            # combiner = combiner.conj().T
 
             for k in range(K * B):
                 if k not in BS_serve[b]:

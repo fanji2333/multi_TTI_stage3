@@ -221,34 +221,36 @@ for u in range(U):
         os.makedirs(pic_save_path)
 
     plt.figure()
-    for k, v in interference_ICI_dict[u][0].items():
-        ici_data = [ici_dict[k][0] + 30 for ici_dict in interference_ICI_dict[u]]
+    for k, v in interference_ICI_dict[u][0]['0'].items():
+        ici_data = []
+        for ici_dict in interference_ICI_dict[u]:
+            ici_data.append(ici_dict['0'][k][0] + 30)
         plt.plot(range(T), ici_data, label=f"from BS {k[0]} user {k[1]} layer 1")
     plt.legend()
     plt.xlabel("TTI")
     plt.ylabel("dBm")
-    plt.title(f"{method} interference ICI comparison for user {u}")
+    plt.title(f"{method} interference ICI comparison for user {u} layer 1")
     plt.grid(True)
-    plt.savefig(os.path.join(pic_save_path, f"{method} interference ICI comparison for user {u}.png"))
+    plt.savefig(os.path.join(pic_save_path, f"{method} interference ICI comparison for user {u} layer 1.png"))
     plt.show()
 
     plt.figure()
     ici_dict = {}
-    for k, v in interference_ICI_dict[u][0].items():
+    for k, v in interference_ICI_dict[u][0]['0'].items():
         if k[0] not in ici_dict:
             ici_dict[k[0]] = [0] * T
         for t, ici_dict_u in enumerate(interference_ICI_dict[u]):
-            for d in ici_dict_u[k]:
+            for d in ici_dict_u['0'][k]:
                 ici_dict[k[0]][t] += 10 ** (d / 10)
-    for k, v in interference_ICI_est[u][0].items():
-        ici_est_data = [ici_dict[k] + 30 for ici_dict in interference_ICI_est[u]]
+    for k, v in interference_ICI_est[u][0]['0'].items():
+        ici_est_data = [ici_dict['0'][k] + 30 for ici_dict in interference_ICI_est[u]]
         plt.plot(range(T), ici_est_data, '--', label=f"ICI est from BS {k}")
         ici_data = [10 * np.log10(ici) + 30 for ici in ici_dict[k]]
         plt.plot(range(T), ici_data, label=f"ICI from BS {k}")
     plt.legend()
     plt.xlabel("TTI")
     plt.ylabel("dBm")
-    plt.title(f"{method} interference ICI est comparison for user {u}")
+    plt.title(f"{method} interference ICI est comparison for user {u} layer 1")
     plt.grid(True)
-    plt.savefig(os.path.join(pic_save_path, f"{method} interference ICI est comparison for user {u}.png"))
+    plt.savefig(os.path.join(pic_save_path, f"{method} interference ICI est comparison for user {u} layer 1.png"))
     plt.show()

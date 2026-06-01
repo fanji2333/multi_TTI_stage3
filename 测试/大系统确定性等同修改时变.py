@@ -37,7 +37,7 @@ def main():
     P_mat = np.diag(p_alloc)
 
     # 每个用户的一阶AR模型时间相关系数 rho_k
-    np.random.seed(42)
+    np.random.seed(422)
     rho_k = [0.9966] * K
 
     # ==========================

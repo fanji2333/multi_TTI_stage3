@@ -10,11 +10,11 @@ from omnisafe.utils.config import Config
 
 
 class BiasCorrectedEWMA:
-    def __init__(self, alpha=0.1):
+    def __init__(self, alpha=0.1, init=0):
         self.alpha = alpha
         self.beta = 1 - alpha  # 衰减因子
-        self.raw_avg = 0  # 原始EWMA值
-        self.corrected_avg = 0  # 校正后的值
+        self.raw_avg = init  # 原始EWMA值
+        self.corrected_avg = init  # 校正后的值
         self.t = 0  # 时间步数
 
     def update(self, value):
@@ -32,6 +32,9 @@ class BiasCorrectedEWMA:
         else:
             self.corrected_avg = self.raw_avg
 
+        return self.corrected_avg
+
+    def get_avg(self):
         return self.corrected_avg
 
     def reset(self):

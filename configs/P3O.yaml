@@ -147,7 +147,7 @@ defaults:
     r: 0.9                         # 信道空间相关系数
     rho: 0.9966                    # 信道时间相关系数
     theta_bar: 90                  # 固定信道中心角，从ULA平面方向算起(角度制)
-    delta_theta: 5               # 围绕中心角向两边扩散的最大角度(角度制)
+    delta_theta: 15               # 围绕中心角向两边扩散的最大角度(角度制)
     kai: 3.141592653589793             # 2*pi*d/λ，固定取d/λ为1/2
     #    sigma_sh: 8                   # shadow fading(dB)
     #    delta_sh: 0.5                 # shadow fading参数

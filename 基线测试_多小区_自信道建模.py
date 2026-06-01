@@ -26,6 +26,29 @@ class myBS(BS):
         super().__init__(id, P, noise, max_UE, Mt, Mr, SRS_period, buffer_len, MCS_table)
         self.pos = pos
 
+    def collect_channels(self, H, slots, UEs):
+        self.H_bs_real = H
+        self.n_stream = 0
+        for u in self.serve_UEs:
+            self.n_stream += u.n_layer
+        if slots % self.SRS_period == 0:
+            self.H_bs_total = H
+            for u in UEs:
+                if u in self.serve_UEs:
+                    self.Rr[u.id], self.Rt[u.id] = u.Rr[self.id].get_avg(), u.Rt[self.id].get_avg()
+                    eigenvalues_r, eigenvectors_r = np.linalg.eigh(self.Rr[u.id])
+                    eigenvalues_r = eigenvalues_r[::-1]
+                    eigenvectors_r = eigenvectors_r[:, ::-1]
+                    u.combiner_eff_gain = eigenvalues_r[:u.max_layer]
+                    u.v_combiner = eigenvectors_r[:, :u.max_layer]
+                    if slots != 0:
+                        self.rho[u.id].update(self.calculate_rho(self.H_bs_serve[u.id][0], self.H_bs_total[u.id][0]))
+                    self.H_bs_serve[u.id] = self.H_bs_total[u.id]
+                    self.H_l_bs_serve[u.id] = u.large_scale_fadings[self.id]
+            self.CSI_update_delay = 0
+        else:
+            self.CSI_update_delay += 1
+
     def choose_mcs2(self, mcs_table: dict, ceiling: bool, mean_SINR_estimate: bool, BSs):
         mcs_list = []
         postSINR_estimation_list = []
@@ -41,7 +64,8 @@ class myBS(BS):
                 if mean_SINR_estimate:
                     sinr_estimate_list = []
                     for l in range(u.n_layer):
-                        gain = ((self.rho[u.id] ** (2 * self.CSI_update_delay)) * (self.H_l_bs_serve[u.id] ** 2)
+                        ICI_list[i_u][l] = {}
+                        gain = ((self.rho[u.id].get_avg() ** (2 * self.CSI_update_delay)) * (self.H_l_bs_serve[u.id] ** 2)
                                 * self.P_user[u.id][l] * u.combiner_eff_gain[l] * self.Mt)
                         interference = 0
                         for v in self.serve_UEs:
@@ -53,7 +77,7 @@ class myBS(BS):
                                 else:
                                     interference += (self.P_user[v.id][i] * u.combiner_eff_gain[l]
                                                  * np.trace(self.Rt[v.id] @ self.Rt[u.id]).real / self.Mt)
-                        mu_loss = ((1 - self.rho[u.id] ** (2 * self.CSI_update_delay)) * (self.H_l_bs_serve[u.id] ** 2)
+                        mu_loss = ((1 - self.rho[u.id].get_avg() ** (2 * self.CSI_update_delay)) * (self.H_l_bs_serve[u.id] ** 2)
                                    * interference)
                         for bs_id, hl in u.large_scale_fadings.items():
                             if bs_id != self.id:
@@ -61,10 +85,10 @@ class myBS(BS):
                                 ici = 0
                                 for v in BSs[bs_id].serve_UEs:
                                     ici += (u.large_scale_fadings[bs_id] ** 2) * np.sum(BSs[bs_id].P_user[v.id]) * 1/self.Mt * (
-                                        (u.v_combiner[:, l].conj().T @ u.Rr[bs_id] @ u.v_combiner[:, l]) * np.trace(
-                                    v.Rt[bs_id] @ u.Rt[bs_id])).real
+                                        (u.v_combiner[:, l].conj().T @ u.Rr[bs_id].get_avg() @ u.v_combiner[:, l]) * np.trace(
+                                    v.Rt[bs_id].get_avg() @ u.Rt[bs_id].get_avg())).real
                                 mu_loss += ici
-                                ICI_list[i_u][bs_id] = 10 * np.log10(ici)
+                                ICI_list[i_u][l][bs_id] = 10 * np.log10(ici)
                         sinr_estimate_list.append(gain / (mu_loss + self.noise))
                         gain_list[i_u].append(10 * np.log10(gain))
                         interference_list[i_u].append(10 * np.log10(mu_loss))
@@ -248,7 +272,7 @@ class Environment:
         # 是否读取固定信道实现
         self.fix_channel = cfg.fix_channel
         # 信道保存地址
-        self.channel_file = '/home/fj24/26_4_Huawei_multiTTI_stage3/信道/自信道实现/channel_multi_cell.hdf5'
+        self.channel_file = '/home/fj24/26_4_Huawei_multiTTI_stage3/信道/自信道实现/'
 
         self.Rt = {}
         self.Rr = {}
@@ -289,7 +313,9 @@ class Environment:
             self.feedback_scheduler.reset(u)
 
         if self.fix_channel:
-            self._H = self.load_from_hdf5(self._slots, self.channel_file)
+            self._H = self.load_from_hdf5(self._slots, self.channel_file + 'channel_multi_cell.hdf5')
+            self.load_R_from_h5py(self.channel_file + 'R_multi_cell.hdf5')
+            self.load_Hl_from_h5py(self.channel_file + 'Hl_multi_cell.hdf5')
         else:
             # 随机初始化用户位置
             for bs in self.BSs:
@@ -338,7 +364,9 @@ class Environment:
                                                                            u.n_layer)
                     self._H[bs.id][u.id] = self.Hl[bs.id][u.id] * Hs[bs.id][u.id]
 
-            self.save_to_hdf5(self.channel_file)
+            self.save_to_hdf5(self.channel_file + 'channel_multi_cell.hdf5')
+            self.save_R_to_h5py(self.channel_file + 'R_multi_cell.hdf5')
+            self.save_Hl_to_h5py(self.channel_file + 'Hl_multi_cell.hdf5')
 
         # # TODO:保存一次仿真信道轨迹用于统一对比
         # # 创建或打开HDF5文件
@@ -357,6 +385,12 @@ class Environment:
         #     group = f[f"group_{self._slots}"]
         #     for k in range(self._K_all):
         #         self._H[k] = group['channel'][k]
+
+        for u in self.UEs:
+            for bs in self.BSs:
+                u.Rr[bs.id] = BiasCorrectedEWMA(alpha=0.3, init=self.Rr[bs.id][u.id] * self._Mr)
+                u.Rt[bs.id] = BiasCorrectedEWMA(alpha=0.3, init=self.Rt[bs.id][u.id] * self._Mt)
+                u.large_scale_fadings[bs.id] = self.Hl[bs.id][u.id] / np.sqrt(self._Mt * self._Mr)
 
         # 各个BS整理信道信息
         # 只有SRS周期时BS才会更新信道
@@ -384,8 +418,8 @@ class Environment:
 
         # rank自适应并计算预编码
         for bs in self.BSs:
-            bs.optimize_n_layer_exhaustive(self.MCS_table, self._mean_SINR_estimate)
-            # bs.generate_precoder()
+            # bs.optimize_n_layer_exhaustive(self.MCS_table, self._mean_SINR_estimate)
+            bs.generate_precoder()
 
         # 根据调度结果更新用户数据队列，记录这一时隙内总发送比特数，并考察时延约束违反情况
         tot_bits = 0
@@ -461,7 +495,7 @@ class Environment:
 
         # 本时隙结束，下一时隙开始
         if self.fix_channel:
-            self._H = self.load_from_hdf5(self._slots, self.channel_file)
+            self._H = self.load_from_hdf5(self._slots, self.channel_file + 'channel_multi_cell.hdf5')
         else:
             # 生成小尺度衰落
             Hs = {}
@@ -472,7 +506,7 @@ class Environment:
                                                                            u.n_layer)
                     self._H[bs.id][u.id] = self._rho * self._H[bs.id][u.id] + self._rho2 * self.Hl[bs.id][u.id] * \
                                            Hs[bs.id][u.id]
-            self.save_to_hdf5(self.channel_file)
+            self.save_to_hdf5(self.channel_file + 'channel_multi_cell.hdf5')
         # # 创建或打开HDF5文件
         # with h5py.File('channel_multi_cell.hdf5', 'a') as f:
         #     if f'group_{self._slots}' not in f:
@@ -547,6 +581,56 @@ class Environment:
                     result[int(bs_id)][int(u_id)] = np.array(bs_group[u_id])
         return result
 
+    def save_R_to_h5py(self, file_path):
+        with h5py.File(file_path, 'w') as f:
+            rt_group = f.create_group('Rt')
+            for bs_id, bs_dict in self.Rt.items():
+                bs_subgroup = rt_group.create_group(str(bs_id))
+                for ue_id, matrix in bs_dict.items():
+                    bs_subgroup.create_dataset(str(ue_id), data=matrix)
+
+            rr_group = f.create_group('Rr')
+            for bs_id, bs_dict in self.Rr.items():
+                bs_subgroup = rr_group.create_group(str(bs_id))
+                for ue_id, matrix in bs_dict.items():
+                    bs_subgroup.create_dataset(str(ue_id), data=matrix)
+
+    def load_R_from_h5py(self, file_path):
+        self.Rt = {}
+        self.Rr = {}
+        with h5py.File(file_path, 'r') as f:
+            rt_group = f['Rt']
+            for bs_id in rt_group.keys():
+                self.Rt[int(bs_id)] = {}
+                bs_subgroup = rt_group[bs_id]
+                for ue_id in bs_subgroup.keys():
+                    self.Rt[int(bs_id)][int(ue_id)] = np.array(bs_subgroup[ue_id])
+
+            rr_group = f['Rr']
+            for bs_id in rr_group.keys():
+                self.Rr[int(bs_id)] = {}
+                bs_subgroup = rr_group[bs_id]
+                for ue_id in bs_subgroup.keys():
+                    self.Rr[int(bs_id)][int(ue_id)] = np.array(bs_subgroup[ue_id])
+
+    def save_Hl_to_h5py(self, file_path):
+        with h5py.File(file_path, 'w') as f:
+            hl_group = f.create_group('Hl')
+            for bs_id, bs_dict in self.Hl.items():
+                bs_subgroup = hl_group.create_group(str(bs_id))
+                for ue_id, value in bs_dict.items():
+                    bs_subgroup.create_dataset(str(ue_id), data=value)
+
+    def load_Hl_from_h5py(self, file_path):
+        self.Hl = {}
+        with h5py.File(file_path, 'r') as f:
+            hl_group = f['Hl']
+            for bs_id in hl_group.keys():
+                self.Hl[int(bs_id)] = {}
+                bs_subgroup = hl_group[bs_id]
+                for ue_id in bs_subgroup.keys():
+                    self.Hl[int(bs_id)][int(ue_id)] = bs_subgroup[ue_id][()]
+
     def generate_gaussian_channel(self, Rr, Rt, n_layers):
 
         Mt = self._Mt
@@ -619,6 +703,7 @@ class Environment:
             down = 0
             down_ICI = 0
             combiner = u.combiner[l, :]
+            down_ICI_dict[l] = {}
             # p_c = np.linalg.norm(combiner) ** 2
 
             for bs in self.BSs:
@@ -635,10 +720,10 @@ class Environment:
                                     combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
                                 down_ICI += ici
                                 key = str(bs.id) + str(v.id)
-                                if key in down_ICI_dict:
-                                    down_ICI_dict[key].append(ici)
+                                if key in down_ICI_dict[l]:
+                                    down_ICI_dict[l][key].append(ici)
                                 else:
-                                    down_ICI_dict[key] = [ici]
+                                    down_ICI_dict[l][key] = [ici]
                             else:
                                 down += np.linalg.norm(
                                     combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
@@ -694,7 +779,7 @@ class Environment:
         info["interference"] = [10 * np.log10(i) for i in sinr_info["interference"]]
         info["interference_ICI"] = [10 * np.log10(i) for i in sinr_info["interference_ICI"]]
         info["noise + interference"] = [10 * np.log10(ni) for ni in sinr_info["noise + interference"]]
-        info["interference_ICI_dict"] = {k: [10 * np.log10(vi) for vi in v] for k, v in
+        info["interference_ICI_dict"] = {k0: {k1: [10 * np.log10(vi) for vi in v1] for k1, v1 in v0.items()} for k0, v0 in
                                          sinr_info["interference_ICI_dict"].items()}
         # print(f"ACK/NACK: {ACK}")
 
