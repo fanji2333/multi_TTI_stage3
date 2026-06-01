@@ -17,201 +17,26 @@ from common.tools import plot, plot_bar
 from common.tools import get_default_kwargs_yaml
 from common.tools import BiasCorrectedEWMA
 
+from env.environment_multicell_QuaDRiGa_SU import User, BS, FeedbackScheduler
+from 基线测试_多小区_QuaDRiGa import Evaluator
 
-class User:
-    def __init__(self, id, BLER_T, Mr, N_layer):
-        self.id = id
-        self.BLER_T = BLER_T
-        self.Mr = Mr
-        self.n_layer = N_layer
-        self.serve_BS: BS = None
-        self.BLER = 0
-        self.BLER_ideal = 0
-        self.precoder = None
-        self.combiner = None
-        self.combiner_eff_gain = []
-        self.pos = [0, 0]
-        self.large_scale_fadings = {}
+class myBS(BS):
 
-    def reset(self):
-        self.BLER = 0
-        self.BLER_ideal = 0
-        self.precoder = None
-        self.combiner = None
-        self.combiner_eff_gain = []
-
-    def update_BLER(self, ack, slot, ideal_bler=None):
-        self.BLER = (self.BLER * (slot - 1) + (1 - ack)) / slot
-        if ideal_bler is not None:
-            self.BLER_ideal = (self.BLER_ideal * (slot - 1) + ideal_bler) / slot
-
-class BS:
-    def __init__(self, id, P, noise, max_UE, Mt, Mr, SRS_period, buffer_len, rho, pos):
-        self.id = id
-        self.P = P
-        self.noise = noise
-        self.max_UE = max_UE
-        self.Mt = Mt
-        self.Mr = Mr
-        self.SRS_period = SRS_period
-        self.buffer_len = buffer_len
-        # TODO: 暂时将rho取为试出来的固定值
-        self.rho = [0.9966, 0.9966]
-        # self.rho2 = 20 * np.log10(rho)
+    def __init__(self, id, P, noise, max_UE, Mt, Mr, SRS_period, buffer_len, MCS_table, pos):
+        super().__init__(id, P, noise, max_UE, Mt, Mr, SRS_period, buffer_len, MCS_table)
         self.pos = pos
-        self.Rt = {}
-        self.Rr = {}
-        self.serve_UEs = []
-        self.ACK_dict = {}
-        self.OLLA = {}
-        self.OLLA_max = 40
-        self.OLLA_min = -40
-        self.OLLA_step = 0.5
-        self.H_bs_total = {}
-        self.H_bs_serve = {}
-        self.H_l_bs_total = {}
-        self.H_l_bs_serve = {}
-        self.CSI_update_delay = 0
-        self.P_user = {}
-        self.H_bs_real = {}
-        self.n_stream = 0
-        self.WMMSE_max_iteration = 5
-        self.mu_loss_per_user_dB = 2
 
-    def collect_channels(self, H, slots, UEs):
-        self.H_bs_real = H
-        self.n_stream = 0
-        for u in self.serve_UEs:
-            self.n_stream += u.n_layer
-        if slots % self.SRS_period == 0:
-            self.H_bs_total = H
-            for u in UEs:
-                self.H_l_bs_total[u.id], Hs = self.separate_large_scale_fading(H[u.id])
-                u.large_scale_fadings[self.id] = self.H_l_bs_total[u.id]
-                if u in self.serve_UEs:
-                    self.Rr[u.id], self.Rt[u.id] = self.estimate_corr_matrix(Hs)
-                    eigenvalues_r, _ = np.linalg.eigh(self.Rr[u.id])
-                    eigenvalues_r = eigenvalues_r[::-1]
-                    u.combiner_eff_gain = eigenvalues_r[:u.n_layer]
-                    # if slots != 0:
-                    #     self.rho[u.id] = self.calculate_rho(self.H_bs_serve[u.id][0], self.H_bs_total[u.id][0])
-                    self.H_bs_serve[u.id] = self.H_bs_total[u.id]
-                    self.H_l_bs_serve[u.id] = self.H_l_bs_total[u.id]
-            self.CSI_update_delay = 0
-        else:
-            self.CSI_update_delay += 1
-
-        # print(f"距离上次更新CSI已经过去{self.CSI_update_delay}")
-
-    def calculate_rho(self, H_old, H):
-        rho_gap = np.linalg.norm(np.trace(H_old @ H.conj().T) / (np.linalg.norm(H_old, 'fro') ** 2))
-        return rho_gap ** (1 / self.SRS_period)
-
-    def generate_precoder(self):
-        K = len(self.serve_UEs)
-        # WMMSE
-        # 先以EZF预编码初始化
-        H_equal = np.zeros((self.n_stream, self.Mt), dtype=np.complex128)
-        combiner = np.zeros((self.n_stream, self.Mr), dtype=np.complex128)
-        for uidx, u in enumerate(self.serve_UEs):
-            U, s, VT = np.linalg.svd(self.H_bs_serve[u.id][0].conj().T)
-            combiner[uidx * u.n_layer: (uidx + 1) * u.n_layer, :] = U[:, :u.n_layer].conj().T
-            H_equal[uidx * u.n_layer: (uidx + 1) * u.n_layer, :] = combiner[uidx * u.n_layer: (uidx + 1) * u.n_layer, :] @ self.H_bs_serve[u.id][0].conj().T
-        inv = np.linalg.inv(H_equal @ H_equal.conj().T + self.n_stream * self.noise / self.P * np.eye(self.n_stream))
-        precoder = H_equal.conj().T @ inv
-        precoder = np.sqrt(self.P / np.trace(precoder.conj().T @ precoder)) * precoder
-
-        # # WMMSE迭代
-        # combiner = np.zeros((self.Mr, self.n_stream), dtype=np.complex128)
-        # for iteration in range(self.WMMSE_max_iteration):
-        #     receivers = {}
-        #     mse_weights = {}
-        #
-        #     # 更新MMSE接收机
-        #     for uidx, u in enumerate(self.serve_UEs):
-        #
-        #         H_user = self.H_bs_serve[u.id][0]
-        #
-        #         W_user = precoder[:, uidx * u.n_layer: (uidx + 1) * u.n_layer]
-        #
-        #         # 接收信号协方差
-        #         R_yy = self.noise * np.eye(self.Mr, dtype=complex)
-        #         for v in self.serve_UEs:
-        #             if v != u:
-        #                 W_other = precoder[:, v.id * v.n_layer: (v.id + 1) * v.n_layer]
-        #                 R_yy += H_user.conj().T @ W_other @ W_other.conj().T @ H_user
-        #
-        #         # MMSE接收机
-        #         try:
-        #             signal = H_user.conj().T @ W_user
-        #             G_mmse = np.linalg.inv(R_yy + 1e-10 * np.eye(self.Mr)) @ signal
-        #             receivers[u.id] = G_mmse
-        #             combiner[:, uidx * u.n_layer: (uidx + 1) * u.n_layer] = G_mmse
-        #
-        #             # MSE权重
-        #             I = np.eye(u.n_layer, dtype=complex)
-        #             MSE_k = I - G_mmse.conj().T @ signal - signal.conj().T @ G_mmse + \
-        #                     G_mmse.conj().T @ R_yy @ G_mmse
-        #             mse_weights[u.id] = np.linalg.inv(MSE_k + 1e-10 * I)
-        #         except:
-        #             pass
-        #
-        #     # 更新预编码器
-        #     for uidx, u in enumerate(self.serve_UEs):
-        #
-        #         H_user = self.H_bs_serve[u.id][0]
-        #
-        #         # 构建干扰矩阵
-        #         A = 1e-10 * np.eye(self.Mt, dtype=complex)
-        #         for v in self.serve_UEs:
-        #             if v != u:
-        #                 H_j = self.H_bs_serve[v.id][0]
-        #                 G_j = receivers[v.id]
-        #                 U_j = mse_weights[v.id]
-        #                 A += H_j @ G_j @ U_j @ G_j.conj().T @ H_j.conj().T
-        #
-        #         # 更新预编码
-        #         try:
-        #             B = H_user @ receivers[u.id] @ mse_weights[u.id]
-        #             W_new = np.linalg.inv(A) @ B
-        #
-        #             # 功率约束
-        #             power = np.trace(W_new @ W_new.conj().T).real
-        #             if power > 0:
-        #                 n_scheduled = K
-        #                 power_budget = self.P / max(n_scheduled, 1)
-        #                 W_new = W_new * np.sqrt(power_budget / power)
-        #
-        #             precoder[:, uidx * u.n_layer: (uidx + 1) * u.n_layer] = W_new
-        #         except:
-        #             pass
-
-            # # 功率归一化
-            # precoder = np.sqrt(self.P / np.trace(precoder.conj().T @ precoder)) * precoder
-
-        # # combiner归一化
-        # for s in range(self.n_stream):
-        #     combiner[:, s] = combiner[:, s] / np.linalg.norm(combiner[:, s])
-        #
-        # # 我仿真时用的combiner还需要共轭转置才适配
-        # combiner = combiner.conj().T
-
-        for uidx, u in enumerate(self.serve_UEs):
-            self.P_user[u.id] = []
-            for l in range(u.n_layer):
-                self.P_user[u.id].append(np.linalg.norm(precoder[:, uidx * u.n_layer + l]) ** 2)
-            u.precoder = precoder[:, uidx * u.n_layer: (uidx + 1) * u.n_layer]
-            u.combiner = combiner[uidx * u.n_layer: (uidx + 1) * u.n_layer, :]
-
-    def choose_mcs(self, mcs_table: dict, ceiling: bool, mean_SINR_estimate: bool, BSs):
+    def choose_mcs2(self, mcs_table: dict, ceiling: bool, mean_SINR_estimate: bool, BSs):
         mcs_list = []
         postSINR_estimation_list = []
         postSINR_estimation_raw_list = []
         gain_list = []
         interference_list = []
-        for u in self.serve_UEs:
+        ICI_list = []
+        for i_u, u in enumerate(self.serve_UEs):
             gain_list.append([])
             interference_list.append([])
+            ICI_list.append({})
             if not ceiling:
                 if mean_SINR_estimate:
                     sinr_estimate_list = []
@@ -232,10 +57,17 @@ class BS:
                                    * interference)
                         for bs_id, hl in u.large_scale_fadings.items():
                             if bs_id != self.id:
-                                mu_loss += (u.large_scale_fadings[bs_id] ** 2) * self.P
+                                # ici = (u.large_scale_fadings[bs_id] ** 2) * self.P
+                                ici = 0
+                                for v in BSs[bs_id].serve_UEs:
+                                    ici += (u.large_scale_fadings[bs_id] ** 2) * np.sum(BSs[bs_id].P_user[v.id]) * 1/self.Mt * (
+                                        (u.v_combiner[:, l].conj().T @ u.Rr[bs_id] @ u.v_combiner[:, l]) * np.trace(
+                                    v.Rt[bs_id] @ u.Rt[bs_id])).real
+                                mu_loss += ici
+                                ICI_list[i_u][bs_id] = 10 * np.log10(ici)
                         sinr_estimate_list.append(gain / (mu_loss + self.noise))
-                        gain_list[u.id].append(10 * np.log10(gain))
-                        interference_list[u.id].append(10 * np.log10(mu_loss))
+                        gain_list[i_u].append(10 * np.log10(gain))
+                        interference_list[i_u].append(10 * np.log10(mu_loss))
                     sinr_estimate = np.exp(np.mean(np.log(np.array(sinr_estimate_list))))       # 层间几何平均
                     sinr_estimate = 10* np.log10(sinr_estimate)
                 else:
@@ -245,8 +77,8 @@ class BS:
                     mu_loss = self.mu_loss_per_user_dB * (len(self.serve_UEs) - 1)
                     layer_loss = 10 * np.log10(u.n_layer)
                     sinr_estimate = sinr_estimate - mu_loss - layer_loss
-                    gain_list[u.id].append(10 * np.log10(gain))
-                    interference_list[u.id].append(mu_loss)
+                    gain_list[i_u].append(10 * np.log10(gain))
+                    interference_list[i_u].append(mu_loss)
 
                 postSINR_estimation_raw_list.append(sinr_estimate)
                 sinr_estimate += self.OLLA[u.id]
@@ -263,9 +95,9 @@ class BS:
                                 precoding_vector = v.precoder[:, i]
 
                                 if v == u and i == l:
-                                    up = np.linalg.norm(combiner @ self.H_bs_real[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
+                                    up = np.linalg.norm(combiner @ bs.H_bs_real[u.id][0].conj().T @ precoding_vector) ** 2
                                 else:
-                                    down += np.linalg.norm(combiner @ self.H_bs_real[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
+                                    down += np.linalg.norm(combiner @ bs.H_bs_real[u.id][0].conj().T @ precoding_vector) ** 2
 
                     sinr_list.append(up / (down + self.noise))
                 sinr_estimate = np.exp(np.mean(np.log(np.array(sinr_list))))  # 层间几何平均
@@ -286,127 +118,10 @@ class BS:
             "postSINR_estimation_raw_list": postSINR_estimation_raw_list,
             "gain_list": gain_list,
             "interference_list": interference_list,
+            "ICI_list": ICI_list
         }
         return mcs_list, info
 
-    def get_user_idx(self, u: User):
-        assert u in self.serve_UEs, "User not served!"
-        return self.serve_UEs.index(u)
-
-    def log_user(self, u: User):
-        self.serve_UEs.append(u)
-        self.ACK_dict[u.id] = [1 for _ in range(self.buffer_len)]
-        self.OLLA[u.id] = 0
-
-    def update_ACK(self, u: User, ack, OLLA_scheme):
-        self.ACK_dict[u.id].append(ack)
-        self.ACK_dict[u.id] = self.ACK_dict[u.id][1:]
-        assert len(self.ACK_dict[u.id]) == self.buffer_len, "ACK list length is not equal to buffer_len!"
-        if OLLA_scheme:
-            if ack:
-                self.OLLA[u.id] += self.OLLA_step * u.BLER_T
-                if self.OLLA[u.id] >= self.OLLA_max:
-                    self.OLLA[u.id] = self.OLLA_max
-            else:
-                self.OLLA[u.id] -= self.OLLA_step * (1 - u.BLER_T)
-                if self.OLLA[u.id] <= self.OLLA_min:
-                    self.OLLA[u.id] = self.OLLA_min
-        else:
-            # if self.CSI_update_delay == 159:
-            #     self.OLLA[u.id] = 0
-            # else:
-            #     self.OLLA[u.id] += self.rho2
-            # TODO: OLLA周期重置
-            if self.CSI_update_delay == 159:
-                self.OLLA[u.id] = 0
-            else:
-                if ack:
-                    self.OLLA[u.id] += self.OLLA_step * u.BLER_T
-                    if self.OLLA[u.id] >= self.OLLA_max:
-                        self.OLLA[u.id] = self.OLLA_max
-                else:
-                    self.OLLA[u.id] -= self.OLLA_step * (1 - u.BLER_T)
-                    if self.OLLA[u.id] <= self.OLLA_min:
-                        self.OLLA[u.id] = self.OLLA_min
-
-    def separate_large_scale_fading(self, H_samples):
-        """
-        从带有相同大尺度衰落的信道样本中分离大尺度衰落因子alpha
-        :param H_samples: M×Nt×Nr 的信道样本数组，M为样本数，Nr接收天线数，Nt发射天线数
-        :return: alpha: 大尺度衰落因子（复数）
-                 H_small_samples: M×Nr×Nt 的小尺度衰落信道样本数组
-        """
-        M, Nt, Nr = H_samples.shape
-
-        # ---------------- 分离大尺度衰落的幅度 |alpha| ----------------
-        # 计算每个样本的弗罗贝尼乌斯范数平方（总功率）
-        P_k = np.array([np.sum(np.abs(Hk) ** 2) for Hk in H_samples])
-        # 统计平均功率
-        P_avg = np.mean(P_k)
-        # 计算幅度 |alpha|
-        alpha = np.sqrt(P_avg / (Nr * Nt))
-
-        # ---------------- 提取小尺度衰落信道样本 ----------------
-        H_small_samples = H_samples / alpha  # 广播除法，逐样本除以alpha
-
-        return alpha, H_small_samples
-
-    def estimate_corr_matrix(self, H_samples):
-        """
-        从信道样本估计收发相关矩阵
-        :param H_samples: M×Nt×Nr 信道样本数组
-        :return: Rr_hat: 接收端相关矩阵 Nr×Nr
-                 Rt_hat: 发射端相关矩阵 Nt×Nt
-        """
-        M, Nt, Nr = H_samples.shape
-
-        # 估计接收端相关矩阵 Rr = E{H^HH}/Nt
-        Rr_hat = np.zeros((Nr, Nr), dtype=np.complex_)
-        for H in H_samples:
-            Rr_hat += H.conj().T @ H / M
-        Rr_hat /= Nt  # 归一化
-
-        # 估计发射端相关矩阵 Rt = E{HH^H}/Nr
-        Rt_hat = np.zeros((Nt, Nt), dtype=np.complex_)
-        for H in H_samples:
-            Rt_hat += H @ H.conj().T / M
-        Rt_hat /= Nr  # 归一化
-
-        return Rr_hat, Rt_hat
-
-    def reset(self):
-        self.Rt = {}
-        self.Rr = {}
-        self.serve_UEs = []
-        self.ACK_dict = {}
-        self.OLLA = {}
-        self.H_bs_total = {}
-        self.H_bs_serve = {}
-        self.H_l_bs_total = {}
-        self.H_l_bs_serve = {}
-        self.CSI_update_delay = 0
-        self.P_user = {}
-        self.H_bs_real = {}
-        self.n_stream = 0
-
-class FeedbackScheduler:
-
-    def __init__(self, D):
-        self.feedback = {}
-        self.D = D
-
-    def log_user(self, u: User):
-        self.feedback[u.id] = [1] * self.D
-
-    def update(self, u: User, ack):
-        self.feedback[u.id].append(ack)
-        delayed_feedback = self.feedback[u.id][0]
-        self.feedback[u.id] = self.feedback[u.id][1:]
-        assert len(self.feedback[u.id]) == self.D, "feedback list length is not equal to feedback delay!"
-        return delayed_feedback
-
-    def reset(self, u: User):
-        self.feedback[u.id] = [1] * self.D
 
 class Environment:
 
@@ -511,10 +226,10 @@ class Environment:
         self.feedback_scheduler = FeedbackScheduler(self._D)
 
         # 生成BS
-        self.BSs: list[BS] = []
+        self.BSs: list[myBS] = []
         for i in range(self._B):
             # temp = {"max P": self._max_P, "location": BS_pos[i], "shadow": shadow_BS[i]}
-            self.BSs.append(BS(i, self._P, self._sigma, self._K_BS, self._Mt, self._Mr,
+            self.BSs.append(myBS(i, self._P, self._sigma, self._K_BS, self._Mt, self._Mr,
                                self._SRS_period, self._buffer_len, self._rho, self._BS_pos[i]))
 
         # 生成用户
@@ -533,7 +248,7 @@ class Environment:
         # 是否读取固定信道实现
         self.fix_channel = cfg.fix_channel
         # 信道保存地址
-        self.channel_file = '/home/fj24/25_8_Huawei_multiTTI/信道/自信道实现/channel_multi_cell.hdf5'
+        self.channel_file = '/home/fj24/26_4_Huawei_multiTTI_stage3/信道/自信道实现/channel_multi_cell.hdf5'
 
         self.Rt = {}
         self.Rr = {}
@@ -667,17 +382,10 @@ class Environment:
 
         self._slots += 1
 
-        # 计算预编码
+        # rank自适应并计算预编码
         for bs in self.BSs:
-            bs.generate_precoder()
-        # TODO: 尽管是多小区，但只需要对0号BS进行真实传输，其余BS只是用来生成干扰的
-        MCS_list, info = self.BSs[0].choose_mcs(self.MCS_table, self._ceiling, self._mean_SINR_estimate, self.BSs)
-        postSINR_estimation_list = info["postSINR_estimation_list"]
-        postSINR_estimation_raw_list = info["postSINR_estimation_raw_list"]
-        gain_list = info["gain_list"]
-        interference_list = info["interference_list"]
-
-        # print(f"MCS_list: {MCS_list}")
+            bs.optimize_n_layer_exhaustive(self.MCS_table, self._mean_SINR_estimate)
+            # bs.generate_precoder()
 
         # 根据调度结果更新用户数据队列，记录这一时隙内总发送比特数，并考察时延约束违反情况
         tot_bits = 0
@@ -690,42 +398,55 @@ class Environment:
         user_sinr = []
         user_gain = []
         user_interference = []
+        user_interference_ICI = []
         user_interference_plus_noise = []
-        for i, u in enumerate(self.BSs[0].serve_UEs):
-
-            bits, ACK, info = self.get_rate(u, str(MCS_list[i]))
-            ideal_bler = self.get_bler(10 ** (info["sinr"] / 10), self.MCS_table[MCS_list[i]][0])
-            delayed_feedback = self.feedback_scheduler.update(u, ACK)
-            u.serve_BS.update_ACK(u, delayed_feedback, self._OLLA_scheme)
-            u.update_BLER(ACK, self._slots, ideal_bler)
-            # u.update_BLER(ACK, self._slots)
-
-            # 记录各类参数
-            tot_bits += bits / self._K
-            user_bits.append(bits)
-            ACK_list.append(ACK)
-            user_BLER.append(u.BLER)
-            user_BLER_ideal.append(u.BLER_ideal)
-            user_OLLA.append(u.serve_BS.OLLA[u.id])
-            user_sinr.append(info["sinr"])
-            user_gain.append(info["gain"])
-            user_interference.append(info["interference"])
-            user_interference_plus_noise.append(info["noise + interference"])
-            self.user_MCS_distribution[i][int(MCS_list[i]) - 1] += 1
-
-        # tot_bps = tot_bits / (self._slot_t * 1e-3)
-        # user_bps = [ele / (self._slot_t * 1e-3) for ele in user_bits]
-
-        # 完美MCS选择
+        user_layer = []
+        postSINR_estimation = []
+        postSINR_estimation_raw = []
+        gain_list = []
+        interference_list = []
+        ICI_list = []
         ideal_MCS_list = []
-        for i, u in enumerate(self.BSs[0].serve_UEs):
-            mcs = "1"
-            for key, value in self.MCS_table.items():
-                if user_sinr[i] >= value[1]:
-                    mcs = key
-                else:
-                    break
-            ideal_MCS_list.append(mcs)
+        all_MCS_list = []
+        user_interference_ICI_dict = []
+        for bs in self.BSs:
+            MCS_list, info = bs.choose_mcs2(self.MCS_table, self._ceiling, self._mean_SINR_estimate, self.BSs)
+            postSINR_estimation += info["postSINR_estimation_list"]
+            postSINR_estimation_raw += info["postSINR_estimation_raw_list"]
+            gain_list += info["gain_list"]
+            interference_list += info["interference_list"]
+            ICI_list += info["ICI_list"]
+            all_MCS_list += MCS_list
+
+            for i, u in enumerate(bs.serve_UEs):
+                bits, ACK, info = self.get_rate(u, MCS_list[i])
+                ideal_bler = self.get_bler(10 ** (info["sinr"] / 10), self.MCS_table[MCS_list[i]][0])
+                delayed_feedback = self.feedback_scheduler.update(u, ACK)
+                u.serve_BS.update_ACK(u, delayed_feedback, self._OLLA_scheme)
+                u.update_BLER(ACK, self._slots, ideal_bler)
+
+                # 记录各类参数
+                tot_bits += bits / self._K
+                user_bits.append(bits)
+                ACK_list.append(ACK)
+                user_BLER.append(u.BLER)
+                user_BLER_ideal.append(u.BLER_ideal)
+                user_OLLA.append(u.serve_BS.OLLA[u.id])
+                user_sinr.append(info["sinr"])
+                user_gain.append(info["gain"])
+                user_interference.append(info["interference"])
+                user_interference_ICI.append(info["interference_ICI"])
+                user_interference_plus_noise.append(info["noise + interference"])
+                user_layer.append(u.n_layer)
+                user_interference_ICI_dict.append(info["interference_ICI_dict"])
+                self.user_MCS_distribution[u.id][int(MCS_list[i]) - 1] += 1
+                mcs = "1"
+                for key, value in self.MCS_table.items():
+                    if info["sinr"] >= value[1]:
+                        mcs = key
+                    else:
+                        break
+                ideal_MCS_list.append(mcs)
 
         # 奖励
         # 直接以总传输bit数为奖励
@@ -781,16 +502,20 @@ class Environment:
             'user_BLER_ideal': user_BLER_ideal,
             'user_OLLA': user_OLLA,
             'user_sinr': user_sinr,
-            'user_mcs': [int(mcs) for mcs in MCS_list],
+            'user_mcs': [int(mcs) for mcs in all_MCS_list],
             'user_mcs_ideal': [int(mcs) for mcs in ideal_MCS_list],
             'user_gain': user_gain,
             'user_interference': user_interference,
+            'user_interference_ICI': user_interference_ICI,
             'user_interference_plus_noise': user_interference_plus_noise,
-            'postsinr_estimation': postSINR_estimation_list,
-            'postsinr_estimation_raw': postSINR_estimation_raw_list,
+            'postsinr_estimation': postSINR_estimation,
+            'postsinr_estimation_raw': postSINR_estimation_raw,
             'gain_estimation': gain_list,
             'interference_estimation': interference_list,
+            'ICI_estimation': ICI_list,
             'user_MCS_distribution': self.user_MCS_distribution,
+            'user_layer': user_layer,
+            'user_interference_ICI_dict': user_interference_ICI_dict,
         }
 
         state, cost = None, None
@@ -886,30 +611,51 @@ class Environment:
         sinr_list = []
         up_list = []
         down_list = []
+        down_ICI_list = []
+        down_ICI_dict = {}
+        IN_list = []
         for l in range(u.n_layer):
             up = 0
             down = 0
+            down_ICI = 0
             combiner = u.combiner[l, :]
+            # p_c = np.linalg.norm(combiner) ** 2
 
             for bs in self.BSs:
                 for v in bs.serve_UEs:
                     for i in range(v.n_layer):
                         precoding_vector = v.precoder[:, i]
+                        # p_p = np.linalg.norm(precoding_vector) ** 2
 
                         if v == u and i == l:
                             up = np.linalg.norm(combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
                         else:
-                            down += np.linalg.norm(combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
+                            if bs.id != u.serve_BS.id:
+                                ici = np.linalg.norm(
+                                    combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
+                                down_ICI += ici
+                                key = str(bs.id) + str(v.id)
+                                if key in down_ICI_dict:
+                                    down_ICI_dict[key].append(ici)
+                                else:
+                                    down_ICI_dict[key] = [ici]
+                            else:
+                                down += np.linalg.norm(
+                                    combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
 
-            sinr_list.append(up / (down + self._sigma))
+            sinr_list.append(up / (down + down_ICI + self._sigma))
             up_list.append(up)
             down_list.append(down)
+            down_ICI_list.append(down_ICI)
+            IN_list.append(down + down_ICI + self._sigma)
         sinr = np.exp(np.mean(np.log(np.array(sinr_list))))  # 层间几何平均
 
         info = {
             "gain": up_list,
             "interference": down_list,
-            "noise + interference": [d + self._sigma for d in down_list],
+            "interference_ICI": down_ICI_list,
+            "noise + interference": IN_list,
+            "interference_ICI_dict": down_ICI_dict,
         }
 
         return sinr, info
@@ -924,7 +670,7 @@ class Environment:
         # if sinr != 0:
         #     temp = 10 * np.log10(sinr)
         #     print(f"the SINR of user {u.id} is : {temp}")
-            # self.sinr_interference_condition[u][has_ICI].append(temp)
+        # self.sinr_interference_condition[u][has_ICI].append(temp)
 
         # ideal_bler = self.get_bler(sinr, self.MCS_table[mcs][0])
         # if np.random.rand() >= ideal_bler:
@@ -946,268 +692,30 @@ class Environment:
         info["sinr"] = sinr
         info["gain"] = [10 * np.log10(g) for g in sinr_info["gain"]]
         info["interference"] = [10 * np.log10(i) for i in sinr_info["interference"]]
+        info["interference_ICI"] = [10 * np.log10(i) for i in sinr_info["interference_ICI"]]
         info["noise + interference"] = [10 * np.log10(ni) for ni in sinr_info["noise + interference"]]
+        info["interference_ICI_dict"] = {k: [10 * np.log10(vi) for vi in v] for k, v in
+                                         sinr_info["interference_ICI_dict"].items()}
         # print(f"ACK/NACK: {ACK}")
 
         return bits, ACK, info
 
 
-class Evaluator:
-
-    def __init__(self, cfgs: Config, save_filepath: str) -> None:
-
-        self._cfgs: Config = cfgs
-        self._save = save_filepath
-
-        assert hasattr(cfgs.train_cfgs, 'device'), 'Please specify the device in the config file.'
-        # self._device: torch.device = get_device(self._cfgs.train_cfgs.device)
-        self._device = cfgs.train_cfgs.device
-
-        self._init_env()
-
-        self._logger = []
-        self._metrics = {
-            'EpRet': [],
-            'EpCost': [],
-            'EpLen': []
-        }
-
+class myEvaluator(Evaluator):
     def _init_env(self):
         self._env = Environment(
             self._cfgs.env_cfgs,
             self._device
         )
 
-    def process_sinr_data(self, sinr_data, period):
-        result = []
-        # t = sinr_data[0::period]
-        for i in range(period):
-            temp = []
-            ave_data = sinr_data[i::period]
-            for j in range(self._cfgs.env_cfgs.U):
-                ave = [data[j] for data in ave_data]
-                ave = np.array(ave)
-                if len(ave.shape) == 1:
-                    ave = ave.mean()
-                    ave = float(ave)
-                else:
-                    ave = ave.mean(axis=0)
-                    ave = [float(i) for i in ave.tolist()]
-                temp.append(ave)
-            result.append(temp)
-        return result
-
-    def evaluate(self, step_num, need_plot: bool = True):
-
-        step_rewards: list[float] = []
-        # step_costs: list[float] = []
-        slot_bits = []
-        user_bits = []
-        user_BLER = []
-        user_BLER_ideal = []
-        user_OLLA = []
-        user_sinr = []
-        user_mcs = []
-        user_mcs_ideal = []
-        user_gain = []
-        user_interference = []
-        user_interference_plus_noise = []
-        postsinr_estimation = []
-        postsinr_estimation_raw = []
-        gain_estimation = []
-        interference_estimation = []
-        pic_save_path = self._save
-        # ep_cost = torch.zeros(self._env.get_cost_num()).to(self._device)
-        total_bits = 0
-
-        obs, info = self._env.reset()
-
-        for step in range(step_num):
-
-            obs, reward, cost, info = self._env.step()
-
-            # ep_cost += info.get('original_cost', cost)
-            print(f'step {step} complete')
-
-            # step_rewards.append(info['origin_reward'].cpu())
-            # step_costs.append(info['cost_list'])
-            slot_bits.append(info['tot_bits'])
-            user_bits.append(info['user_bits'])
-            user_BLER.append(info['user_BLER'])
-            user_BLER_ideal.append(info['user_BLER_ideal'])
-            user_OLLA.append(info['user_OLLA'])
-            user_sinr.append(info['user_sinr'])
-            user_mcs.append(info['user_mcs'])
-            user_mcs_ideal.append(info['user_mcs_ideal'])
-            user_gain.append(info['user_gain'])
-            user_interference.append(info['user_interference'])
-            user_interference_plus_noise.append(info['user_interference_plus_noise'])
-            postsinr_estimation.append(info['postsinr_estimation'])
-            postsinr_estimation_raw.append(info['postsinr_estimation_raw'])
-            gain_estimation.append(info['gain_estimation'])
-            interference_estimation.append(info['interference_estimation'])
-
-            total_bits += info['tot_bits']
-
-        # sinr_condition = info['sinr_condition']
-        # plot_hist(sinr_condition[0], 'MRT user 0 gain condition', 'gain/dB')
-        # plot_hist(sinr_condition[1], 'user 1 SINR condition')
-        # plot_hist(sinr_condition[2], 'user 2 SINR condition')
-        # print(ep_cost)
-        user_MCS_distribution = info['user_MCS_distribution']
-        user_sinr_ave = self.process_sinr_data(user_sinr, 160)
-        user_gain_ave = self.process_sinr_data(user_gain, 160)
-        user_interference_ave = self.process_sinr_data(user_interference, 160)
-        user_interference_plus_noise_ave = self.process_sinr_data(user_interference_plus_noise, 160)
-        gain_estimation_ave = self.process_sinr_data(gain_estimation, 160)
-        interference_estimation_ave = self.process_sinr_data(interference_estimation, 160)
-        postsinr_ave = self.process_sinr_data(postsinr_estimation, 160)
-
-        slots = range(step_num)
-        data_dict = {
-            "step_rewards": step_rewards,
-            # "step_costs": step_costs,
-            "slots": list(slots),
-            "slot_bits": slot_bits,
-            "user_bits": user_bits,
-            "user_BLER": user_BLER,
-            "user_BLER_ideal": user_BLER_ideal,
-            "user_OLLA": user_OLLA,
-            "user_MCS_distribution": user_MCS_distribution,
-            "user_mcs": user_mcs,
-            "user_mcs_ideal": user_mcs_ideal,
-            "user_sinr": user_sinr,
-            "user_sinr_ave": user_sinr_ave,
-            "user_gain": user_gain,
-            "user_gain_ave": user_gain_ave,
-            "user_interference": user_interference,
-            "user_interference_ave": user_interference_ave,
-            "user_interference_plus_noise": user_interference_plus_noise,
-            "user_interference_plus_noise_ave": user_interference_plus_noise_ave,
-            "postsinr_estimation": postsinr_estimation,
-            "postsinr_estimation_raw": postsinr_estimation_raw,
-            "gain_estimation": gain_estimation,
-            "interference_estimation": interference_estimation,
-            "gain_estimation_ave": gain_estimation_ave,
-            "interference_estimation_ave": interference_estimation_ave,
-            "postsinr_ave": postsinr_ave,
-        }
-
-        if need_plot:
-            # plot(step_costs, slots, 'costs per slot', pic_save_path)
-            # plot(slot_bits, slots, 'total bits per slot', pic_save_path)
-            # plot(user_bits, slots, 'bits per UE per slot', pic_save_path)
-            plot(user_BLER, slots, 'BLER per UE per slot', pic_save_path)
-            plot(user_BLER_ideal, slots, 'ideal BLER per UE per slot', pic_save_path)
-            plot(user_OLLA, slots, 'OLLAs per UE per slot', pic_save_path)
-            plot(user_sinr, slots, 'sinr per UE per slot', pic_save_path)
-            plot(postsinr_estimation, slots, 'postsinr estimation per UE per slot', pic_save_path)
-            plot(user_sinr_ave, range(160), 'ave sinr per UE per slot', pic_save_path)
-            # plot(user_gain_ave, range(160), 'ave gain per UE per slot', pic_save_path)
-            # plot(user_interference_ave, range(160), 'ave interference per UE per slot', pic_save_path)
-            # plot(user_interference_plus_noise_ave, range(160), 'ave interference + noise per UE per slot', pic_save_path)
-            plot(postsinr_ave, range(160), 'ave postsinr estimation per UE per slot', pic_save_path)
-            for i in range(len(user_MCS_distribution)):
-                plot_bar([x / step_num for x in user_MCS_distribution[i]], None,
-                         f'user {i} MCS distribution', "MCS order", pic_save_path)
-            print(f'after slots {step_num}, average bits/s/Hz is {total_bits / step_num}, BLER is about {user_BLER[-1]}')
-
-            user_num = len(data_dict['user_sinr'][0])
-            user_sinr2 = [[] for _ in range(user_num)]
-            # user_mcs = [[] for _ in range(user_num)]
-            # user_mcs_ideal = [[] for _ in range(user_num)]
-            postsinr_estimation2 = [[] for _ in range(user_num)]
-            postsinr_estimation_raw2 = [[] for _ in range(user_num)]
-            user_gain_ave2 = [[] for _ in range(user_num)]
-            user_interference_ave2 = [[] for _ in range(user_num)]
-            user_interference_plus_noise_ave2 = [[] for _ in range(user_num)]
-            gain_estimation_ave2 = [[] for _ in range(user_num)]
-            interference_estimation_ave2 = [[] for _ in range(user_num)]
-            for u in range(user_num):
-                user_sinr2[u] = [sinr[u] for sinr in data_dict['user_sinr']]
-                # user_mcs[u] = [mcs[u] for mcs in data_dict['user_mcs']]
-                # user_mcs_ideal[u] = [mcs[u] for mcs in data_dict['user_mcs_ideal']]
-                postsinr_estimation2[u] = [postsinr[u] for postsinr in data_dict['postsinr_estimation']]
-                postsinr_estimation_raw2[u] = [postsinr_raw[u] for postsinr_raw in data_dict['postsinr_estimation_raw']]
-                user_gain_ave2[u] = [user_gain_ave[u] for user_gain_ave in data_dict['user_gain_ave']]
-                user_interference_ave2[u] = [user_interference_ave[u] for user_interference_ave in data_dict['user_interference_ave']]
-                user_interference_plus_noise_ave2[u] = [user_interference_plus_noise_ave[u] for user_interference_plus_noise_ave in data_dict['user_interference_plus_noise_ave']]
-                gain_estimation_ave2[u] = [gain_estimation_ave[u] for gain_estimation_ave in data_dict['gain_estimation_ave']]
-                interference_estimation_ave2[u] = [interference_estimation_ave[u] for interference_estimation_ave in
-                                             data_dict['interference_estimation_ave']]
-
-                plt.figure()
-                plt.plot(user_sinr2[u], label="real sinr")
-                plt.plot(postsinr_estimation2[u], label="estimated sinr")
-                plt.plot(postsinr_estimation_raw2[u], label="estimated sinr (without OLLA)")
-                # plt.plot(user_mcs[u], label="mcs")
-                plt.grid(True)
-                plt.legend()
-                # plt.ylim(-10,15)
-                plt.title(f"sinr condition of user {u}")
-
-                filename = f"sinr condition of user {u}.png"
-                filepath = os.path.join(pic_save_path, filename)
-                plt.savefig(filepath)
-
-                # plt.figure()
-                # for layer in range(self._cfgs.env_cfgs.N_layer):
-                #     plt.plot([ga[layer] for ga in user_gain_ave2[u]], label=f"ave gain layer {layer}")
-                #     plt.plot([gea[layer] for gea in gain_estimation_ave2[u]], label=f"ave gain estimation layer {layer}")
-                # # plt.plot(user_mcs[u], label="mcs")
-                # plt.grid(True)
-                # plt.legend()
-                # # plt.ylim(-10,15)
-                # plt.title(f"ave gain condition of user {u}")
-                #
-                # filename = f"ave gain condition of user {u}.png"
-                # filepath = os.path.join(pic_save_path, filename)
-                # plt.savefig(filepath)
-                #
-                # plt.show()
-                #
-                # plt.figure()
-                # for layer in range(self._cfgs.env_cfgs.N_layer):
-                #     plt.plot([ia[layer] for ia in user_interference_ave2[u]], label=f"ave interference layer {layer}")
-                #     plt.plot([iea[layer] for iea in interference_estimation_ave2[u]], label=f"ave interference estimation layer {layer}")
-                # # plt.plot(user_mcs[u], label="mcs")
-                # plt.grid(True)
-                # plt.legend()
-                # # plt.ylim(-10,15)
-                # plt.title(f"ave interference condition of user {u}")
-                #
-                # filename = f"ave interference condition of user {u}.png"
-                # filepath = os.path.join(pic_save_path, filename)
-                # plt.savefig(filepath)
-                #
-                # plt.show()
-                #
-                # plt.figure()
-                # for layer in range(self._cfgs.env_cfgs.N_layer):
-                #     plt.plot([nia[layer] for nia in user_interference_plus_noise_ave2[u]], label=f"ave interference + noise layer {layer}")
-                # # plt.plot(user_mcs[u], label="mcs")
-                # plt.grid(True)
-                # plt.legend()
-                # # plt.ylim(-10,15)
-                # plt.title(f"ave interference + noise condition of user {u}")
-                #
-                # filename = f"ave interference + noise condition of user {u}.png"
-                # filepath = os.path.join(pic_save_path, filename)
-                # plt.savefig(filepath)
-                #
-                # plt.show()
-
-        return data_dict
-
-
 if __name__ == '__main__':
     T = 160*10
 
     # 验证所提算法训练模型
     save = \
-            "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/自信道测试/SINR估计-单流"
+            "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/自信道测试/SINR估计"
     cfgs = get_default_kwargs_yaml('P3O')
-    eval_obj = Evaluator(cfgs, save)
+    eval_obj = myEvaluator(cfgs, save)
     data_dict = eval_obj.evaluate(T, need_plot=True)
 
     data_file_name = "eval_data.json"

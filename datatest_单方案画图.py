@@ -49,7 +49,7 @@ MCS_table = {
 
 # 方案数据
 method = "Multi-Cell SINR"
-save = "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/QuaDRiGa/角度约束/SINR"
+save = "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/自信道测试/SINR估计"
 data_file_name = "eval_data.json"
 data_file_path = os.path.join(save, data_file_name)
 
