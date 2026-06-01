@@ -52,7 +52,6 @@ method = "Multi-Cell SINR"
 save = "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/QuaDRiGa/角度约束/SINR"
 data_file_name = "eval_data.json"
 data_file_path = os.path.join(save, data_file_name)
-pic_save_path = os.path.dirname(os.path.dirname(save))
 
 T = 160*10
 window_size = 400
@@ -217,6 +216,10 @@ for u in range(U):
     # plt.grid(True)
     # plt.show()
 
+    pic_save_path = save + "动态ICI估计"
+    if not os.path.exists(pic_save_path):
+        os.makedirs(pic_save_path)
+
     plt.figure()
     for k, v in interference_ICI_dict[u][0].items():
         ici_data = [ici_dict[k][0] + 30 for ici_dict in interference_ICI_dict[u]]
@@ -226,6 +229,7 @@ for u in range(U):
     plt.ylabel("dBm")
     plt.title(f"{method} interference ICI comparison for user {u}")
     plt.grid(True)
+    plt.savefig(os.path.join(pic_save_path, f"{method} interference ICI comparison for user {u}.png"))
     plt.show()
 
     plt.figure()
@@ -244,6 +248,7 @@ for u in range(U):
     plt.legend()
     plt.xlabel("TTI")
     plt.ylabel("dBm")
-    plt.title(f"{method} interference ICI comparison for user {u}")
+    plt.title(f"{method} interference ICI est comparison for user {u}")
     plt.grid(True)
+    plt.savefig(os.path.join(pic_save_path, f"{method} interference ICI est comparison for user {u}.png"))
     plt.show()

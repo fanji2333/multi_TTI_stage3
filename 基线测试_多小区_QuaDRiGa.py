@@ -51,7 +51,12 @@ class myBS(BS):
                                    * interference)
                         for bs_id, hl in u.large_scale_fadings.items():
                             if bs_id != self.id:
-                                ici = (u.large_scale_fadings[bs_id] ** 2) * self.P
+                                # ici = (u.large_scale_fadings[bs_id] ** 2) * self.P
+                                ici = 0
+                                for v in BSs[bs_id].serve_UEs:
+                                    ici += (u.large_scale_fadings[bs_id] ** 2) * np.sum(BSs[bs_id].P_user[v.id]) * 1/self.Mt * (
+                                        (u.v_combiner[:, l].conj().T @ u.Rr[bs_id] @ u.v_combiner[:, l]) * np.trace(
+                                    v.Rt[bs_id] @ u.Rt[bs_id])).real
                                 mu_loss += ici
                                 ICI_list[i_u][bs_id] = 10 * np.log10(ici)
                         sinr_estimate_list.append(gain / (mu_loss + self.noise))

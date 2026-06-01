@@ -109,15 +109,22 @@ class User:
         self.BLER_ideal = 0
         self.precoder = None
         self.combiner = None
+        self.v_combiner = None
         self.combiner_eff_gain = []
         self.large_scale_fadings = {}
+        self.Rt = {}
+        self.Rr = {}
 
     def reset(self):
         self.BLER = 0
         self.BLER_ideal = 0
         self.precoder = None
         self.combiner = None
+        self.v_combiner = None
         self.combiner_eff_gain = []
+        self.large_scale_fadings = {}
+        self.Rt = {}
+        self.Rr = {}
 
     def update_BLER(self, ack, slot, ideal_bler=None):
         self.BLER = (self.BLER * (slot - 1) + (1 - ack)) / slot
@@ -166,11 +173,14 @@ class BS:
             for u in UEs:
                 self.H_l_bs_total[u.id], Hs = self.separate_large_scale_fading(H[u.id])
                 u.large_scale_fadings[self.id] = self.H_l_bs_total[u.id]
+                u.Rr[self.id], u.Rt[self.id] = self.estimate_corr_matrix(Hs)
                 if u in self.serve_UEs:
-                    self.Rr[u.id], self.Rt[u.id] = self.estimate_corr_matrix(Hs)
-                    eigenvalues_r, _ = np.linalg.eigh(self.Rr[u.id])
+                    self.Rr[u.id], self.Rt[u.id] = u.Rr[self.id], u.Rt[self.id]
+                    eigenvalues_r, eigenvectors_r = np.linalg.eigh(self.Rr[u.id])
                     eigenvalues_r = eigenvalues_r[::-1]
+                    eigenvectors_r = eigenvectors_r[:, ::-1]
                     u.combiner_eff_gain = eigenvalues_r[:u.max_layer]
+                    u.v_combiner = eigenvectors_r[:, :u.max_layer]
                     if slots != 0:
                         self.rho[u.id] = self.calculate_rho(self.H_bs_serve[u.id][0], self.H_bs_total[u.id][0])
                     self.H_bs_serve[u.id] = self.H_bs_total[u.id]
