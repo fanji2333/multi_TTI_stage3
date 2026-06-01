@@ -49,7 +49,7 @@ MCS_table = {
 
 # 方案数据
 method = "Multi-Cell SINR"
-save = "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/自信道测试/SINR估计"
+save = "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/QuaDRiGa/角度约束/SINR"
 data_file_name = "eval_data.json"
 data_file_path = os.path.join(save, data_file_name)
 
@@ -216,7 +216,7 @@ for u in range(U):
     # plt.grid(True)
     # plt.show()
 
-    pic_save_path = save + "动态ICI估计"
+    pic_save_path = save + "/动态ICI估计"
     if not os.path.exists(pic_save_path):
         os.makedirs(pic_save_path)
 

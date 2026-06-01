@@ -35,7 +35,9 @@ class myBS(BS):
                 if mean_SINR_estimate:
                     sinr_estimate_list = []
                     for l in range(u.n_layer):
-                        gain = ((self.rho[u.id] ** (2 * self.CSI_update_delay)) * (self.H_l_bs_serve[u.id] ** 2)
+                        ICI_list[i_u][l] = {}
+                        gain = ((self.rho[u.id].get_avg() ** (2 * self.CSI_update_delay)) * (
+                                    self.H_l_bs_serve[u.id] ** 2)
                                 * self.P_user[u.id][l] * u.combiner_eff_gain[l] * self.Mt)
                         interference = 0
                         for v in self.serve_UEs:
@@ -46,24 +48,26 @@ class myBS(BS):
                                     interference += (self.P_user[v.id][i] * u.combiner_eff_gain[l])
                                 else:
                                     interference += (self.P_user[v.id][i] * u.combiner_eff_gain[l]
-                                                 * np.trace(self.Rt[v.id] @ self.Rt[u.id]).real / self.Mt)
-                        mu_loss = ((1 - self.rho[u.id] ** (2 * self.CSI_update_delay)) * (self.H_l_bs_serve[u.id] ** 2)
+                                                     * np.trace(self.Rt[v.id] @ self.Rt[u.id]).real / self.Mt)
+                        mu_loss = ((1 - self.rho[u.id].get_avg() ** (2 * self.CSI_update_delay)) * (
+                                    self.H_l_bs_serve[u.id] ** 2)
                                    * interference)
                         for bs_id, hl in u.large_scale_fadings.items():
                             if bs_id != self.id:
                                 # ici = (u.large_scale_fadings[bs_id] ** 2) * self.P
                                 ici = 0
                                 for v in BSs[bs_id].serve_UEs:
-                                    ici += (u.large_scale_fadings[bs_id] ** 2) * np.sum(BSs[bs_id].P_user[v.id]) * 1/self.Mt * (
-                                        (u.v_combiner[:, l].conj().T @ u.Rr[bs_id] @ u.v_combiner[:, l]) * np.trace(
-                                    v.Rt[bs_id] @ u.Rt[bs_id])).real
+                                    ici += (u.large_scale_fadings[bs_id] ** 2) * np.sum(
+                                        BSs[bs_id].P_user[v.id]) * 1 / self.Mt * (
+                                                   (u.v_combiner[:, l].conj().T @ u.Rr[bs_id].get_avg() @ u.v_combiner[:, l]) * np.trace(
+                                               v.Rt[bs_id].get_avg() @ u.Rt[bs_id].get_avg())).real
                                 mu_loss += ici
-                                ICI_list[i_u][bs_id] = 10 * np.log10(ici)
+                                ICI_list[i_u][l][bs_id] = 10 * np.log10(ici)
                         sinr_estimate_list.append(gain / (mu_loss + self.noise))
                         gain_list[i_u].append(10 * np.log10(gain))
                         interference_list[i_u].append(10 * np.log10(mu_loss))
-                    sinr_estimate = np.exp(np.mean(np.log(np.array(sinr_estimate_list))))       # 层间几何平均
-                    sinr_estimate = 10* np.log10(sinr_estimate)
+                    sinr_estimate = np.exp(np.mean(np.log(np.array(sinr_estimate_list))))  # 层间几何平均
+                    sinr_estimate = 10 * np.log10(sinr_estimate)
                 else:
                     gain = (np.linalg.norm(self.H_bs_serve[u.id][0], 'fro') ** 2
                             / (self.H_bs_serve[u.id][0].shape[0] * self.H_bs_serve[u.id][0].shape[1]))
@@ -89,9 +93,11 @@ class myBS(BS):
                                 precoding_vector = v.precoder[:, i]
 
                                 if v == u and i == l:
-                                    up = np.linalg.norm(combiner @ bs.H_bs_real[u.id][0].conj().T @ precoding_vector) ** 2
+                                    up = np.linalg.norm(
+                                        combiner @ bs.H_bs_real[u.id][0].conj().T @ precoding_vector) ** 2
                                 else:
-                                    down += np.linalg.norm(combiner @ bs.H_bs_real[u.id][0].conj().T @ precoding_vector) ** 2
+                                    down += np.linalg.norm(
+                                        combiner @ bs.H_bs_real[u.id][0].conj().T @ precoding_vector) ** 2
 
                     sinr_list.append(up / (down + self.noise))
                 sinr_estimate = np.exp(np.mean(np.log(np.array(sinr_list))))  # 层间几何平均
@@ -446,6 +452,7 @@ class Environment:
             down = 0
             down_ICI = 0
             combiner = u.combiner[l, :]
+            down_ICI_dict[l] = {}
             # p_c = np.linalg.norm(combiner) ** 2
 
             for bs in self.BSs:
@@ -458,15 +465,17 @@ class Environment:
                             up = np.linalg.norm(combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
                         else:
                             if bs.id != u.serve_BS.id:
-                                ici = np.linalg.norm(combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
+                                ici = np.linalg.norm(
+                                    combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
                                 down_ICI += ici
                                 key = str(bs.id) + str(v.id)
-                                if key in down_ICI_dict:
-                                    down_ICI_dict[key].append(ici)
+                                if key in down_ICI_dict[l]:
+                                    down_ICI_dict[l][key].append(ici)
                                 else:
-                                    down_ICI_dict[key] = [ici]
+                                    down_ICI_dict[l][key] = [ici]
                             else:
-                                down += np.linalg.norm(combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
+                                down += np.linalg.norm(
+                                    combiner @ self._H[bs.id][u.id][0].conj().T @ precoding_vector) ** 2
 
             sinr_list.append(up / (down + down_ICI + self._sigma))
             up_list.append(up)
@@ -495,7 +504,7 @@ class Environment:
         # if sinr != 0:
         #     temp = 10 * np.log10(sinr)
         #     print(f"the SINR of user {u.id} is : {temp}")
-            # self.sinr_interference_condition[u][has_ICI].append(temp)
+        # self.sinr_interference_condition[u][has_ICI].append(temp)
 
         # ideal_bler = self.get_bler(sinr, self.MCS_table[mcs][0])
         # if np.random.rand() >= ideal_bler:
@@ -519,7 +528,8 @@ class Environment:
         info["interference"] = [10 * np.log10(i) for i in sinr_info["interference"]]
         info["interference_ICI"] = [10 * np.log10(i) for i in sinr_info["interference_ICI"]]
         info["noise + interference"] = [10 * np.log10(ni) for ni in sinr_info["noise + interference"]]
-        info["interference_ICI_dict"] = {k: [10 * np.log10(vi) for vi in v] for k, v in sinr_info["interference_ICI_dict"].items()}
+        info["interference_ICI_dict"] = {k0: {k1: [10 * np.log10(vi) for vi in v1] for k1, v1 in v0.items()} for k0, v0 in
+                                         sinr_info["interference_ICI_dict"].items()}
         # print(f"ACK/NACK: {ACK}")
 
         return bits, ACK, info
