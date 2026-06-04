@@ -46,6 +46,7 @@ def main():
     Thetas_eff = []
     R_Tk_list = []  # 保存发射端相关矩阵，供启发式估计算法使用
     lambda_max_R_list = []  # 保存接收端组合器增益，供启发式估计算法使用
+    Thetas_eff_sqrt = []
 
     R_Tk_sqrts = []
     R_Rk_sqrts = []
@@ -68,6 +69,7 @@ def main():
 
         vals_T, vecs_T = np.linalg.eigh(R_Tk)
         R_Tk_sqrts.append(vecs_T @ np.diag(np.sqrt(np.maximum(vals_T, 0))) @ vecs_T.conj().T)
+        Thetas_eff_sqrt.append(np.sqrt(large_scale[k] * lambda_max_R) * R_Tk_sqrts[k])
 
         R_Rk_sqrts.append(vecs_R @ np.diag(np.sqrt(np.maximum(vals_R, 0))) @ vecs_R.conj().T)
 
@@ -112,6 +114,8 @@ def main():
     for k in range(K):
         summ = sum([p_alloc[j] * e_k_prime[k, j] / (1 + e[j]) ** 2 for j in range(K) if j != k])
         Upsilon_circ[k] = summ / Mt
+        # summ = sum([p_alloc[j] * np.trace(Thetas_eff_sqrt[j] @ Thetas_eff_sqrt[k] @ T_mat) / (1 + e[j]) for j in range(K) if j != k])
+        # Upsilon_circ[k] = summ / Mt
 
     gamma_circ_time = np.zeros((T, K))
     for t in range(T):
@@ -121,6 +125,7 @@ def main():
 
             num = p_alloc[k] * corr_sq * e[k] ** 2
             den1 = Upsilon_circ[k] * (1 - err_var * (1 - (1 + e[k]) ** 2))
+            # den1 = Upsilon_circ[k] * (1 + e[k])
             den2 = (Psi_circ / rho_snr) * (1 + e[k]) ** 2
             gamma_circ_time[t, k] = num / (den1 + den2)
 
