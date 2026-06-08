@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 
 
 def generate_spatial_correlation(M, theta_bar, delta_theta=15):
@@ -117,7 +118,11 @@ def main():
         # summ = sum([p_alloc[j] * np.trace(Thetas_eff_sqrt[j] @ Thetas_eff_sqrt[k] @ T_mat) / (1 + e[j]) for j in range(K) if j != k])
         # Upsilon_circ[k] = summ / Mt
 
-    gamma_circ_time = np.zeros((T, K))
+    # 保存功率变量 (Time x K)
+    DE_SINR_time = np.zeros((T, K))
+    DE_sig_time = np.zeros((T, K))
+    DE_int_time = np.zeros((T, K))
+
     for t in range(T):
         for k in range(K):
             corr_sq = (rho_k[k] ** t) ** 2
@@ -125,19 +130,28 @@ def main():
 
             num = p_alloc[k] * corr_sq * e[k] ** 2
             den1 = Upsilon_circ[k] * (1 - err_var * (1 - (1 + e[k]) ** 2))
-            # den1 = Upsilon_circ[k] * (1 + e[k])
             den2 = (Psi_circ / rho_snr) * (1 + e[k]) ** 2
-            gamma_circ_time[t, k] = num / (den1 + den2)
 
-    DE_SINR_dB = 10 * np.log10(gamma_circ_time)
+            DE_SINR_time[t, k] = num / (den1 + den2)
+
+            # 使用 P 和 Psi_circ 对 DE 的分子分母进行功率定标缩放
+            scale_factor = P / (Psi_circ * (1 + e[k]) ** 2)
+            DE_sig_time[t, k] = num * scale_factor
+            DE_int_time[t, k] = den1 * scale_factor
+
+    DE_SINR_dB = 10 * np.log10(DE_SINR_time)
+    DE_sig_dB = 10 * np.log10(DE_sig_time)
+    DE_int_dB = 10 * np.log10(DE_int_time + 1e-12)
 
     # ==========================
-    # 4. 新增: 计算上传代码中的 Heuristic SINR 估算
+    # 4. 计算 Heuristic SINR 与 功率估算
     # ==========================
-    print("Calculating Heuristic SINR Estimate from snippet...")
-    Heuristic_SINR_time = np.zeros((T, K))
+    print("Calculating Heuristic SINR Estimate...")
+    Est_SINR_time = np.zeros((T, K))
+    Est_sig_time = np.zeros((T, K))
+    Est_int_time = np.zeros((T, K))
+
     for k in range(K):
-        # 预先计算独立于时间的干扰项 (对应 snippet 中的 interference)
         interf_k = 0
         for j in range(K):
             if j != k:
@@ -145,21 +159,24 @@ def main():
 
         for t in range(T):
             aging_factor = rho_k[k] ** (2 * t)
-            # 对应 gain
             gain = aging_factor * large_scale[k] * p_alloc[k] * lambda_max_R_list[k] * Mt
-            # 对应 mu_loss
             mu_loss = (1 - aging_factor) * large_scale[k] * interf_k
 
-            # 对应 sinr_estimate_list.append
-            Heuristic_SINR_time[t, k] = gain / (mu_loss + sigma2)
+            Est_SINR_time[t, k] = gain / (mu_loss + sigma2)
+            Est_sig_time[t, k] = gain
+            Est_int_time[t, k] = mu_loss
 
-    Est_SINR_dB = 10 * np.log10(Heuristic_SINR_time)
+    Est_SINR_dB = 10 * np.log10(Est_SINR_time)
+    Est_sig_dB = 10 * np.log10(Est_sig_time)
+    Est_int_dB = 10 * np.log10(Est_int_time + 1e-12)
 
     # ==========================
     # 5. 蒙特卡洛仿真：L 组 MIMO 时变轨迹
     # ==========================
     print(f"Simulating Empirical MIMO EZF SINR over {L} trajectories, {T} steps each...")
     empirical_sinr = np.zeros((L, T, K))
+    empirical_sig = np.zeros((L, T, K))
+    empirical_int = np.zeros((L, T, K))
 
     for l in range(L):
         # 存储当前大组各用户在各时刻的真实 MIMO 信道矩阵 (N_r x M)
@@ -214,10 +231,17 @@ def main():
                     if j != k:
                         interf_power += p_alloc[j] * np.abs(h_eff_k_t @ G[:, j]) ** 2
 
+                empirical_sig[l, t, k] = signal_power
+                empirical_int[l, t, k] = interf_power
                 empirical_sinr[l, t, k] = signal_power / (interf_power + sigma2)
 
-    empirical_sinr_dB = 10 * np.log10(empirical_sinr)
-    mean_empirical_sinr_dB = np.mean(empirical_sinr_dB, axis=0)
+    emp_sinr_dB = 10 * np.log10(empirical_sinr)
+    emp_sig_dB = 10 * np.log10(empirical_sig)
+    emp_int_dB = 10 * np.log10(empirical_int + 1e-12)
+
+    mean_sinr_dB = np.mean(emp_sinr_dB, axis=0)
+    mean_sig_dB = np.mean(emp_sig_dB, axis=0)
+    mean_int_dB = np.mean(emp_int_dB, axis=0)
 
     # ==========================
     # 6. 绘图展示
@@ -226,37 +250,32 @@ def main():
     plot_users = range(K)
 
     for u in plot_users:
-        fig, axs = plt.subplots(2, 2, figsize=(16, 10))
+        fig, axs = plt.subplots(3, 2, figsize=(16, 16))
         ax1, ax2 = axs[0, 0], axs[0, 1]
         ax3, ax4 = axs[1, 0], axs[1, 1]
-
-        emp_u = empirical_sinr_dB[:, :, u]
-        de_u = DE_SINR_dB[:, u]
-        est_u = Est_SINR_dB[:, u]  # 提取启发式估计算法轨迹
-        mean_u = mean_empirical_sinr_dB[:, u]
+        ax5, ax6 = axs[2, 0], axs[2, 1]
 
         # --------------------------------------------
-        # 子图 1: 添加启发式 SINR 估计算法对比
+        # 子图 1: SINR 对比
         # --------------------------------------------
         for l in range(L):
-            ax1.plot(range(T), emp_u[l, :], color='#1f77b4', alpha=0.08, linewidth=0.8)
+            ax1.plot(range(T), emp_sinr_dB[l, :, u], color='#1f77b4', alpha=0.06, linewidth=0.8)
 
-        ax1.plot(range(T), mean_u, color='r', linewidth=2.5, label='Empirical Mean')
-        ax1.plot(range(T), de_u, color='#d62728', linestyle='--', linewidth=3, label='DE SINR')
-        # 新增绘制 Heuristic 估计算法
-        ax1.plot(range(T), est_u, color='#ff7f0e', linestyle='-.', linewidth=2.5, label='Heuristic Est SINR')
+        ax1.plot(range(T), mean_sinr_dB[:, u], color='r', linewidth=2.5, label='Empirical Mean')
+        ax1.plot(range(T), DE_SINR_dB[:, u], color='#d62728', linestyle='--', linewidth=3, label='DE SINR')
+        ax1.plot(range(T), Est_SINR_dB[:, u], color='#ff7f0e', linestyle='-.', linewidth=2.5, label='Heuristic Est')
 
         ax1.set_xlabel('Time Step (t)', fontsize=11)
         ax1.set_ylabel('SINR (dB)', fontsize=11)
-        ax1.set_title(f'User {u}: SINR Aging over Time ($\\rho={rho_k[u]:.3f}$)', fontsize=12)
+        ax1.set_title(f'User {u}: SINR over Time ($\\rho={rho_k[u]:.3f}$)', fontsize=12)
         ax1.legend(loc='upper right')
         ax1.grid(True, linestyle=':', alpha=0.7)
         ax1.set_xlim([0, T - 1])
 
         # --------------------------------------------
-        # 子图 2: 不作改变
+        # 子图 2: SINR 差值的 CDF
         # --------------------------------------------
-        diff_dB_flat = (emp_u - de_u).flatten()
+        diff_dB_flat = (emp_sinr_dB[:, :, u] - DE_SINR_dB[:, u]).flatten()
         prob_within_3db = np.sum(np.abs(diff_dB_flat) <= 3) / len(diff_dB_flat)
 
         sorted_diff = np.sort(diff_dB_flat)
@@ -267,52 +286,84 @@ def main():
 
         ax2.set_xlabel('Error (Empirical - DE) [dB]', fontsize=11)
         ax2.set_ylabel('CDF', fontsize=11)
-        ax2.set_title(f'User {u}: Overall Error Distribution (DE vs Emp)', fontsize=12)
-
-        x_limit = max(5, np.max(np.abs(sorted_diff)) + 1)
-        ax2.set_xlim(-x_limit, x_limit)
+        ax2.set_title(f'User {u}: Overall SINR Error Distribution', fontsize=12)
+        ax2.set_xlim(max(-10, -np.max(np.abs(sorted_diff)) - 1), max(10, np.max(np.abs(sorted_diff)) + 1))
         ax2.set_ylim(0, 1.05)
         ax2.legend(loc='upper left')
         ax2.grid(True, linestyle=':', alpha=0.7)
 
         # --------------------------------------------
-        # 子图 3: 新增关于 Heuristic 估计算法的误差频率追踪
+        # 子图 3 (新增): 有用信号功率对比
         # --------------------------------------------
-        prob_de_3db_t = np.sum(np.abs(emp_u - de_u) <= 3, axis=0) / L
-        prob_mean_3db_t = np.sum(np.abs(emp_u - mean_u) <= 3, axis=0) / L
-        prob_est_3db_t = np.sum(np.abs(emp_u - est_u) <= 3, axis=0) / L  # 新增
+        for l in range(L):
+            ax3.plot(range(T), emp_sig_dB[l, :, u], color='#1f77b4', alpha=0.06, linewidth=0.8)
 
-        ax3.plot(range(T), prob_de_3db_t, color='#d62728', marker='o', markersize=4, label='P(|Emp - DE| <= 3dB)')
-        ax3.plot(range(T), prob_est_3db_t, color='#ff7f0e', marker='d', markersize=4,
-                 label='P(|Emp - Heuristic| <= 3dB)')
-        ax3.plot(range(T), prob_mean_3db_t, color='#1f77b4', marker='s', markersize=4,
-                 label='P(|Emp - Mean| <= 3dB)')
+        ax3.plot(range(T), mean_sig_dB[:, u], color='r', linewidth=2.5, label='Empirical Mean Signal')
+        ax3.plot(range(T), DE_sig_dB[:, u], color='#d62728', linestyle='--', linewidth=3, label='DE Signal Power')
+        ax3.plot(range(T), Est_sig_dB[:, u], color='#ff7f0e', linestyle='-.', linewidth=2.5, label='Heuristic Signal')
 
         ax3.set_xlabel('Time Step (t)', fontsize=11)
-        ax3.set_ylabel('Probability', fontsize=11)
-        ax3.set_title(f'User {u}: Probability of Absolute Error <= 3dB over Time', fontsize=12)
-        ax3.set_ylim(0, 1.05)
-        ax3.set_xlim([0, T - 1])
-        ax3.legend(loc='lower left')
+        ax3.set_ylabel('Signal Power (dB)', fontsize=11)
+        ax3.set_title(f'User {u}: Signal Power over Time', fontsize=12)
+        ax3.legend(loc='best')
         ax3.grid(True, linestyle=':', alpha=0.7)
+        ax3.set_xlim([0, T - 1])
 
         # --------------------------------------------
-        # 子图 4: 不作改变
+        # 子图 4 (新增): 干扰信号功率对比
         # --------------------------------------------
-        diff_de_mean = de_u - mean_u
+        for l in range(L):
+            ax4.plot(range(T), emp_int_dB[l, :, u], color='#1f77b4', alpha=0.06, linewidth=0.8)
 
-        ax4.plot(range(T), diff_de_mean, color='#9467bd', linewidth=2, marker='^', markersize=5)
-        ax4.axhline(0, color='black', linestyle='--', linewidth=1)
+        ax4.plot(range(T), mean_int_dB[:, u], color='r', linewidth=2.5, label='Empirical Mean Interf')
+        ax4.plot(range(T), DE_int_dB[:, u], color='#d62728', linestyle='--', linewidth=3, label='DE Interf Power')
+        ax4.plot(range(T), Est_int_dB[:, u], color='#ff7f0e', linestyle='-.', linewidth=2.5, label='Heuristic Interf')
 
         ax4.set_xlabel('Time Step (t)', fontsize=11)
-        ax4.set_ylabel('Difference (dB)', fontsize=11)
-        ax4.set_title(f'User {u}: DE-SINR minus Mean SINR over Time', fontsize=12)
+        ax4.set_ylabel('Interference Power (dB)', fontsize=11)
+        ax4.set_title(f'User {u}: Interference Power over Time', fontsize=12)
+        ax4.legend(loc='best')
+        ax4.grid(True, linestyle=':', alpha=0.7)
         ax4.set_xlim([0, T - 1])
+
+        # --------------------------------------------
+        # 子图 5: SINR 随时间变化的 ±3dB 误差频率
+        # --------------------------------------------
+        prob_de_3db_t = np.sum(np.abs(emp_sinr_dB[:, :, u] - DE_SINR_dB[:, u]) <= 3, axis=0) / L
+        prob_est_3db_t = np.sum(np.abs(emp_sinr_dB[:, :, u] - Est_SINR_dB[:, u]) <= 3, axis=0) / L
+        prob_mean_3db_t = np.sum(np.abs(emp_sinr_dB[:, :, u] - mean_sinr_dB[:, u]) <= 3, axis=0) / L
+
+        ax5.plot(range(T), prob_de_3db_t, color='#d62728', marker='o', markersize=4, label='P(|Emp - DE| $\\leq$ 3dB)')
+        ax5.plot(range(T), prob_est_3db_t, color='#ff7f0e', marker='d', markersize=4,
+                 label='P(|Emp - Heuristic| $\\leq$ 3dB)')
+        ax5.plot(range(T), prob_mean_3db_t, color='#1f77b4', marker='s', markersize=4,
+                 label='P(|Emp - Mean| $\\leq$ 3dB)')
+
+        ax5.set_xlabel('Time Step (t)', fontsize=11)
+        ax5.set_ylabel('Probability', fontsize=11)
+        ax5.set_title(f'User {u}: Prob of SINR Error $\\leq$ 3dB over Time', fontsize=12)
+        ax5.set_ylim(0, 1.05)
+        ax5.set_xlim([0, T - 1])
+        ax5.legend(loc='lower left')
+        ax5.grid(True, linestyle=':', alpha=0.7)
+
+        # --------------------------------------------
+        # 子图 6: DE-SINR 与 平均SINR 的差值随时间变化
+        # --------------------------------------------
+        diff_de_mean = DE_SINR_dB[:, u] - mean_sinr_dB[:, u]
+
+        ax6.plot(range(T), diff_de_mean, color='#9467bd', linewidth=2, marker='^', markersize=5)
+        ax6.axhline(0, color='black', linestyle='--', linewidth=1)
+
+        ax6.set_xlabel('Time Step (t)', fontsize=11)
+        ax6.set_ylabel('Difference (dB)', fontsize=11)
+        ax6.set_title(f'User {u}: DE-SINR minus Mean SINR', fontsize=12)
+        ax6.set_xlim([0, T - 1])
 
         max_diff = np.max(np.abs(diff_de_mean))
         y_lim = max(0.5, max_diff * 1.5)
-        ax4.set_ylim(-y_lim, y_lim)
-        ax4.grid(True, linestyle=':', alpha=0.7)
+        ax6.set_ylim(-y_lim, y_lim)
+        ax6.grid(True, linestyle=':', alpha=0.7)
 
         plt.tight_layout()
         plt.show()
