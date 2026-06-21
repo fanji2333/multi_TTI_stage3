@@ -35,12 +35,17 @@ def main():
     alpha = 1 / (beta * rho_snr)
 
     # 每个数据流平均分配功率
-    # p_alloc_flat = (P / K_tot) * np.ones(K_tot)
-    p_alloc_flat = np.ones(K_tot)
+    p_alloc_flat = (P / K_tot) * np.ones(K_tot)
+    # p_alloc_flat = np.ones(K_tot)
     P_mat = np.diag(p_alloc_flat)
+    ave_power_allocate = False
 
-    np.random.seed(10)
+    corr_factor = 0.5
+
+    np.random.seed(402)
     rho_k = [0.9966] * K
+
+    TF = 40 # SINR pdf统计周期
 
     # 将 AR 老化系数展开到各个流 (同一用户的所有流共享相同的信道老化特性)
     rho_flat = np.repeat(rho_k, N_layer)
@@ -132,13 +137,20 @@ def main():
             corr_sq = (rho_flat[vk] ** t) ** 2
             err_var = 1 - corr_sq
 
-            num = (P / K_tot) * p_alloc_flat[vk] * corr_sq * e[vk] ** 2 / Psi_circ[vk]
-            den1 = (P / K_tot) * sum([Upsilon_circ[vk][j] / Psi_circ[j] for j in range(K_tot)]) * (1 - err_var * (1 - (1 + e[vk]) ** 2))
-            den2 = sigma2 * (1 + e[vk]) ** 2
+            if ave_power_allocate:
+                num = (P / K_tot) * p_alloc_flat[vk] * corr_sq * e[vk] ** 2 / Psi_circ[vk]
+                den1 = (P / K_tot) * sum([Upsilon_circ[vk][j] / Psi_circ[j] for j in range(K_tot)]) * (1 - err_var * (1 - (1 + e[vk]) ** 2))
+                den2 = sigma2 * (1 + e[vk]) ** 2
+                scale_factor = 1 / (1 + e[vk]) ** 2
+            else:
+                num = p_alloc_flat[vk] * corr_sq * e[vk] ** 2
+                den1 = sum([Upsilon_circ[vk][j] for j in range(K_tot)]) * (1 - err_var * (1 - (1 + e[vk]) ** 2))
+                den2 = sigma2 * (1 + e[vk]) ** 2 * sum(Psi_circ) / P
+                scale_factor = 1 / (1 + e[vk]) ** 2 * P / sum(Psi_circ)
 
             DE_SINR_time[t, vk] = num / (den1 + den2)
 
-            scale_factor = 1 / (1 + e[vk]) ** 2
+
             DE_sig_time[t, vk] = num * scale_factor
             DE_int_time[t, vk] = den1 * scale_factor
 
@@ -212,8 +224,11 @@ def main():
             h_eff_k = W_k.conj().T @ H_k  # shape: (N_layer, M)
             H_eff_0[k * N_layer: (k + 1) * N_layer, :] = h_eff_k
 
-        inner_inv = np.linalg.inv(H_eff_0 @ H_eff_0.conj().T + Mt * alpha * np.eye(K_tot))
-        G0 = H_eff_0.conj().T @ inner_inv
+        # inner_inv = np.linalg.inv(H_eff_0 @ H_eff_0.conj().T + Mt * alpha * np.eye(K_tot))
+        # G0 = H_eff_0.conj().T @ inner_inv
+
+        inner_inv = np.linalg.inv((1 - corr_factor) * H_eff_0.conj().T @ H_eff_0 + corr_factor * np.sum(Thetas_eff_flat) + Mt * alpha * np.eye(Mt))
+        G0 = inner_inv @ H_eff_0.conj().T
 
         trace_val = np.real(np.trace(P_mat @ G0.conj().T @ G0))
         xi = np.sqrt(P / trace_val)
@@ -232,14 +247,20 @@ def main():
                 H_eff_t[k * N_layer: (k + 1) * N_layer, :] = W_combiners[k].conj().T @ H_true_t[k]
 
             for vk in range(K_tot):
-                # 人为指定功率平均分配
-                g_vk = G[:, vk] * np.sqrt(P / K_tot) / np.linalg.norm(G[:, vk])
+                if ave_power_allocate:
+                    # 人为指定功率平均分配
+                    g_vk = G[:, vk] * np.sqrt(P / K_tot) / np.linalg.norm(G[:, vk])
+                else:
+                    g_vk = G[:, vk]
                 signal_power = p_alloc_flat[vk] * np.abs(H_eff_t[vk, :] @ g_vk) ** 2
 
                 interf_power = 0
                 for vj in range(K_tot):
                     if vj != vk:
-                        g_vj = G[:, vj] * np.sqrt(P / K_tot) / np.linalg.norm(G[:, vj])
+                        if ave_power_allocate:
+                            g_vj = G[:, vj] * np.sqrt(P / K_tot) / np.linalg.norm(G[:, vj])
+                        else:
+                            g_vj = G[:, vj]
                         interf_power += p_alloc_flat[vj] * np.abs(H_eff_t[vk, :] @ g_vj) ** 2
 
                 empirical_sig[l, t, vk] = signal_power
@@ -353,6 +374,43 @@ def main():
             y_lim = max(0.5, max_diff * 1.5)
             ax6.set_ylim(-y_lim, y_lim)
             ax6.grid(True, linestyle=':', alpha=0.7)
+
+            plt.tight_layout()
+            plt.show()
+
+            # --------------------------------------------
+            # 画布 2: 新增的不确定性分析 (方差走势与采样点PDF) (1x2 布局)
+            # --------------------------------------------
+            fig2, (ax7, ax8) = plt.subplots(1, 2, figsize=(15, 6))
+
+            # 新增子图 1 (ax7): 计算真实SINR在每个时间步上的方差 (Variance) 走势
+            var_sinr = np.var(emp_sinr_dB[:, :, vk], axis=0)  # 沿L维计算每个t的方差
+            ax7.plot(range(T), var_sinr, color='#8c564b', linewidth=2.5, marker='o', markersize=5)
+            ax7.set_xlabel('Time Step (t)', fontsize=11)
+            ax7.set_ylabel('Variance of Empirical SINR', fontsize=11)
+            ax7.set_title(f'User {target_user}, Stream {s}: SINR Variance over Time', fontsize=12)
+            ax7.grid(True, linestyle=':', alpha=0.7)
+            ax7.set_xlim([0, T - 1])
+
+            # 新增子图 2 (ax8): 统计位于 TF 整数倍上的分布 PDF
+            # 为不同时间步设置渐变颜色以示区分
+            colors = plt.cm.viridis(np.linspace(0, 0.9, len(range(0, T, TF))))
+
+            for idx, t_samp in enumerate(range(0, T, TF)):
+                data_t = emp_sinr_dB[:, t_samp, vk]
+                # 计算直方图的密度分布
+                counts, bin_edges = np.histogram(data_t, bins=15, density=True)
+                # 取每个 bin 的中点作为折线图的 X 轴坐标
+                bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+                ax8.plot(bin_centers, counts, marker='s', markersize=4, linewidth=2,
+                         color=colors[idx], label=f't = {t_samp}')
+
+            ax8.set_xlabel('Empirical SINR (dB)', fontsize=11)
+            ax8.set_ylabel('Probability Density (PDF)', fontsize=11)
+            ax8.set_title(f'User {target_user}, Stream {s}: Sampled SINR PDF (Period $T_F={TF}$)', fontsize=12)
+            ax8.legend(loc='best')
+            ax8.grid(True, linestyle=':', alpha=0.7)
 
             plt.tight_layout()
             plt.show()

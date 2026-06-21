@@ -217,6 +217,7 @@ class BS:
         H_equal_all = np.vstack(H_equal)
         inv = np.linalg.inv(H_equal_all @ H_equal_all.conj().T + self.n_stream * self.noise / self.P * np.eye(self.n_stream))
         precoder_all = H_equal_all.conj().T @ inv
+        # precoder_all = H_equal_all.conj().T
         precoder_all = np.sqrt(self.P / np.trace(precoder_all.conj().T @ precoder_all)) * precoder_all
         precoder = []
         pointer = 0

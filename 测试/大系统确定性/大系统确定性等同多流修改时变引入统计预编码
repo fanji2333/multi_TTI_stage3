@@ -1,0 +1,438 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+def generate_spatial_correlation(N, theta_bar, delta_theta=15):
+    """生成天线域空间相关矩阵 Theta"""
+    delta_theta_rad = delta_theta / 180 * np.pi
+    kai = np.pi
+    R = np.zeros((N, N), dtype=np.complex128)
+    for m in range(N):
+        for n in range(N):
+            R[m, n] = np.exp(-1j * kai * (m - n) * np.cos(theta_bar)) * \
+                      np.sinc(kai * (m - n) * delta_theta_rad * np.sin(theta_bar) / np.pi)
+    return R
+
+
+def main():
+    # ==========================
+    # 1. 系统与时变信道参数设置
+    # ==========================
+    Mt = 256  # 基站发射天线数
+    Mr = 4  # 用户接收天线数
+    K = 2  # 用户数
+    N_layer = 2  # 每个用户的独立数据流数 (流数 <= N_r)
+    K_tot = K * N_layer  # 等效的“虚拟用户/流”总数
+
+    L_sim = 2000  # 大组信道轨迹数
+    T = 160  # 每组信道轨迹内的时间步数
+    SNR_dB = 10
+    rho_snr = 10 ** (SNR_dB / 10)
+    P = 1.0
+    sigma2 = P / rho_snr
+
+    beta = Mt / K_tot
+    alpha = 1 / (beta * rho_snr)
+
+    # 每个数据流平均分配功率
+    p_alloc_flat = (P / K_tot) * np.ones(K_tot)
+    # p_alloc_flat = np.ones(K_tot)
+    P_mat = np.diag(p_alloc_flat)
+    ave_power_allocate = False
+
+    corr_factor = 0
+
+    np.random.seed(402)
+    rho_k = [0.9966] * K
+
+    TF = 40 # SINR pdf统计周期
+
+    # 将 AR 老化系数展开到各个流 (同一用户的所有流共享相同的信道老化特性)
+    rho_flat = np.repeat(rho_k, N_layer)
+
+    # ==========================
+    # 2. 生成共用的信道统计信息 (引入多流扩展)
+    # ==========================
+    Thetas_eff_flat = []
+    R_Tk_list = []
+    lambda_R_list_all = []  # 保存所有流对应的理论 combiner 增益
+
+    R_Tk_sqrts = []
+    R_Rk_sqrts = []
+
+    large_scale = np.random.uniform(0.3, 1.5, K)
+
+    for k in range(K):
+        theta_bar = np.random.uniform(-np.pi / 3, np.pi / 3)
+        R_Tk = generate_spatial_correlation(Mt, theta_bar)
+        R_Tk_list.append(R_Tk)
+
+        R_Rk = generate_spatial_correlation(Mr, theta_bar)
+
+        # 特征分解提取前 N_layer 个最大特征值
+        vals_R, vecs_R = np.linalg.eigh(R_Rk)
+        vals_R_desc = vals_R[::-1]  # 降序排列
+        lambda_R_k = vals_R_desc[:N_layer]
+        lambda_R_list_all.append(lambda_R_k)
+
+        # 将每个流展开为一个独立的虚拟用户
+        for s in range(N_layer):
+            Theta_eff_ks = large_scale[k] * lambda_R_k[s] * R_Tk
+            Thetas_eff_flat.append(Theta_eff_ks)
+
+        vals_T, vecs_T = np.linalg.eigh(R_Tk)
+        R_Tk_sqrts.append(vecs_T @ np.diag(np.sqrt(np.maximum(vals_T, 0))) @ vecs_T.conj().T)
+        R_Rk_sqrts.append(vecs_R @ np.diag(np.sqrt(np.maximum(vals_R, 0))) @ vecs_R.conj().T)
+
+    # ==========================
+    # 3. 计算 DE 基本变量与解耦理论功率 (维度为 K_tot)
+    # ==========================
+    print("Calculating Deterministic Equivalent components for multi-stream...")
+    e = np.ones(K_tot)
+    for iteration in range(200):
+        e_new = np.zeros(K_tot)
+        sum_term = np.zeros((Mt, Mt), dtype=np.complex128)
+        for j in range(K_tot):
+            sum_term += Thetas_eff_flat[j] / (1 + e[j])
+        sum_term /= Mt
+        T_mat = np.linalg.inv(sum_term + alpha * np.eye(Mt))
+        for i in range(K_tot):
+            e_new[i] = np.real(np.trace(Thetas_eff_flat[i] @ T_mat) / Mt)
+        if np.max(np.abs(e - e_new)) < 1e-6:
+            e = e_new
+            break
+        e = e_new
+
+    T2 = T_mat @ T_mat
+    v = np.array([np.real(np.trace(Thetas_eff_flat[i] @ T2) / Mt) for i in range(K_tot)])
+    J = np.zeros((K_tot, K_tot))
+    for i in range(K_tot):
+        for j in range(K_tot):
+            J[i, j] = np.real(np.trace(Thetas_eff_flat[i] @ T_mat @ Thetas_eff_flat[j] @ T_mat)) / (
+                        Mt * Mt * (1 + e[j]) ** 2)
+
+    e_prime = np.linalg.inv(np.eye(K_tot) - J) @ v
+
+    e_k_prime = np.zeros((K_tot, K_tot))
+    for vk in range(K_tot):
+        v_k = np.array(
+            [np.real(np.trace(Thetas_eff_flat[i] @ T_mat @ Thetas_eff_flat[vk] @ T_mat) / Mt) for i in range(K_tot)])
+        e_k_prime[vk, :] = np.linalg.inv(np.eye(K_tot) - J) @ v_k
+
+    Psi_circ = [p_alloc_flat[j] * e_prime[j] / (1 + e[j]) ** 2 / Mt for j in range(K_tot)]
+    Upsilon_circ = [[] for i in range(K_tot)]
+    for vk in range(K_tot):
+        for j in range(K_tot):
+            if j != vk:
+                Upsilon_circ[vk].append(p_alloc_flat[j] * e_k_prime[vk, j] / (1 + e[j]) ** 2 / Mt)
+            else:
+                Upsilon_circ[vk].append(0)
+
+    DE_SINR_time = np.zeros((T, K_tot))
+    DE_sig_time = np.zeros((T, K_tot))
+    DE_int_time = np.zeros((T, K_tot))
+
+    for t in range(T):
+        for vk in range(K_tot):
+            corr_sq = (rho_flat[vk] ** t) ** 2
+            err_var = 1 - corr_sq
+
+            if ave_power_allocate:
+                num = (P / K_tot) * p_alloc_flat[vk] * corr_sq * e[vk] ** 2 / Psi_circ[vk]
+                den1 = (P / K_tot) * sum([Upsilon_circ[vk][j] / Psi_circ[j] for j in range(K_tot)]) * (1 - err_var * (1 - (1 + e[vk]) ** 2))
+                den2 = sigma2 * (1 + e[vk]) ** 2
+                scale_factor = 1 / (1 + e[vk]) ** 2
+            else:
+                num = p_alloc_flat[vk] * corr_sq * e[vk] ** 2
+                den1 = sum([Upsilon_circ[vk][j] for j in range(K_tot)]) * (1 - err_var * (1 - (1 + e[vk]) ** 2))
+                den2 = sigma2 * (1 + e[vk]) ** 2 * sum(Psi_circ) / P
+                scale_factor = 1 / (1 + e[vk]) ** 2 * P / sum(Psi_circ)
+
+            DE_SINR_time[t, vk] = num / (den1 + den2)
+
+
+            DE_sig_time[t, vk] = num * scale_factor
+            DE_int_time[t, vk] = den1 * scale_factor
+
+    DE_SINR_dB = 10 * np.log10(DE_SINR_time)
+    DE_sig_dB = 10 * np.log10(DE_sig_time)
+    DE_int_dB = 10 * np.log10(DE_int_time + 1e-12)
+
+    # for corr_factor in [0.8, 0.9, 0.95, 1]:
+    #     corr_factor /= 10
+    # ==========================
+    # 4. 生成初始信道状态及对应预编码
+    # ==========================
+
+    H_true_0 = []
+    H_eff_0 = np.zeros((K_tot, Mt), dtype=np.complex128)
+    W_combiners = []
+
+    for k in range(K):
+        Z = (np.random.randn(Mr, Mt) + 1j * np.random.randn(Mr, Mt)) / np.sqrt(2)
+        H_k = np.sqrt(large_scale[k]) * (R_Rk_sqrts[k] @ Z @ R_Tk_sqrts[k])
+        H_true_0.append(H_k)
+
+        U, S, Vh = np.linalg.svd(H_k, full_matrices=False)
+        W_k = U[:, :N_layer]  # 取前 N_layer 个最大奇异向量作为各流的 Combiner
+        W_combiners.append(W_k)
+
+        # 将多天线信道降维成 N_layer 个等效 MISO 信道
+        h_eff_k = W_k.conj().T @ H_k  # shape: (N_layer, M)
+        H_eff_0[k * N_layer: (k + 1) * N_layer, :] = h_eff_k
+
+    # inner_inv = np.linalg.inv(H_eff_0 @ H_eff_0.conj().T + Mt * alpha * np.eye(K_tot))
+    # G0 = H_eff_0.conj().T @ inner_inv
+
+    inner_inv = np.linalg.inv(
+        (1 - corr_factor) * H_eff_0.conj().T @ H_eff_0 + corr_factor * np.sum(Thetas_eff_flat) + Mt * alpha * np.eye(
+            Mt))
+    G0 = inner_inv @ H_eff_0.conj().T
+
+    trace_val = np.real(np.trace(P_mat @ G0.conj().T @ G0))
+    xi = np.sqrt(P / trace_val)
+    G = xi * G0
+
+    # ==========================
+    # 5. 计算 Heuristic SINR 与 功率估算 (严格映射双重循环逻辑)
+    # ==========================
+    print("Calculating Heuristic SINR Estimate for multi-stream...")
+    Est_SINR_time = np.zeros((T, K_tot))
+    Est_sig_time = np.zeros((T, K_tot))
+    Est_int_time = np.zeros((T, K_tot))
+
+    for k in range(K):
+        for s in range(N_layer):
+            vk = k * N_layer + s  # 展平后的流索引
+            lambda_R_ks = lambda_R_list_all[k][s]
+
+            # 计算当前流面对的干扰 (复现提供的代码段逻辑)
+            interf_vk = 0
+            for j in range(K):
+                for s_prime in range(N_layer):
+                    vj = j * N_layer + s_prime
+                    if j == k and s_prime == s:
+                        continue  # 自己不干扰自己
+                    elif j == k:
+                        # Intra-user interference (同一用户的其他流)
+                        if ave_power_allocate:
+                            interf_vk += p_alloc_flat[vj] * lambda_R_ks * (P / K_tot)
+                        else:
+                            interf_vk += p_alloc_flat[vj] * lambda_R_ks * (np.linalg.norm(G[:, vj]) ** 2)
+                    else:
+                        # Inter-user interference (其他用户的流)
+                        if ave_power_allocate:
+                            interf_vk += p_alloc_flat[vj] * lambda_R_ks * np.trace(R_Tk_list[j] @ R_Tk_list[k]).real / Mt * (P / K_tot)
+                        else:
+                            interf_vk += p_alloc_flat[vj] * lambda_R_ks * np.trace(R_Tk_list[j] @ R_Tk_list[k]).real / Mt * (np.linalg.norm(G[:, vj]) ** 2)
+
+            for t in range(T):
+                aging_factor = rho_k[k] ** (2 * t)
+                if ave_power_allocate:
+                    gain = aging_factor * large_scale[k] * p_alloc_flat[vk] * lambda_R_ks * Mt * (P/K_tot)
+                else:
+                    gain = aging_factor * large_scale[k] * p_alloc_flat[vk] * lambda_R_ks * Mt * (np.linalg.norm(G[:, vk]) ** 2)
+                mu_loss = (1 - aging_factor) * large_scale[k] * interf_vk
+
+                Est_SINR_time[t, vk] = gain / (mu_loss + sigma2)
+                Est_sig_time[t, vk] = gain
+                Est_int_time[t, vk] = mu_loss
+
+    Est_SINR_dB = 10 * np.log10(Est_SINR_time)
+    Est_sig_dB = 10 * np.log10(Est_sig_time)
+    Est_int_dB = 10 * np.log10(Est_int_time + 1e-12)
+
+    # ==========================
+    # 6. 蒙特卡洛仿真获取真实功率与SINR
+    # ==========================
+    print(f"Simulating Empirical Multi-Stream MIMO EZF over {L_sim} trajectories...")
+    empirical_sinr = np.zeros((L_sim, T, K_tot))
+    empirical_sig = np.zeros((L_sim, T, K_tot))
+    empirical_int = np.zeros((L_sim, T, K_tot))
+
+    for l in range(L_sim):
+        H_true_t = H_true_0.copy()
+        for t in range(T):
+            if t > 0:
+                for k in range(K):
+                    Z_innov = (np.random.randn(Mr, Mt) + 1j * np.random.randn(Mr, Mt)) / np.sqrt(2)
+                    H_innov = np.sqrt(large_scale[k]) * (R_Rk_sqrts[k] @ Z_innov @ R_Tk_sqrts[k])
+                    H_true_t[k] = rho_k[k] * H_true_t[k] + np.sqrt(1 - rho_k[k] ** 2) * H_innov
+
+            # 计算当前时刻各用户、各流的等效信道
+            H_eff_t = np.zeros((K_tot, Mt), dtype=np.complex128)
+            for k in range(K):
+                H_eff_t[k * N_layer: (k + 1) * N_layer, :] = W_combiners[k].conj().T @ H_true_t[k]
+
+            for vk in range(K_tot):
+                if ave_power_allocate:
+                    # 人为指定功率平均分配
+                    g_vk = G[:, vk] * np.sqrt(P / K_tot) / np.linalg.norm(G[:, vk])
+                else:
+                    g_vk = G[:, vk]
+                signal_power = p_alloc_flat[vk] * np.abs(H_eff_t[vk, :] @ g_vk) ** 2
+
+                interf_power = 0
+                for vj in range(K_tot):
+                    if vj != vk:
+                        if ave_power_allocate:
+                            g_vj = G[:, vj] * np.sqrt(P / K_tot) / np.linalg.norm(G[:, vj])
+                        else:
+                            g_vj = G[:, vj]
+                        interf_power += p_alloc_flat[vj] * np.abs(H_eff_t[vk, :] @ g_vj) ** 2
+
+                empirical_sig[l, t, vk] = signal_power
+                empirical_int[l, t, vk] = interf_power
+                empirical_sinr[l, t, vk] = signal_power / (interf_power + sigma2)
+
+    emp_sinr_dB = 10 * np.log10(empirical_sinr)
+    emp_sig_dB = 10 * np.log10(empirical_sig)
+    emp_int_dB = 10 * np.log10(empirical_int + 1e-12)
+
+    mean_sinr_dB = np.mean(emp_sinr_dB, axis=0)
+    mean_sig_dB = np.mean(emp_sig_dB, axis=0)
+    mean_int_dB = np.mean(emp_int_dB, axis=0)
+
+    # ==========================
+    # 6. 流级绘图展示
+    # ==========================
+    print("Plotting stream-level results...")
+
+    # for target_user in range(K):
+    for target_user in range(1):
+
+        for s in range(N_layer):
+            vk = target_user * N_layer + s
+
+            fig, axs = plt.subplots(3, 2, figsize=(16, 16))
+            ax1, ax2 = axs[0, 0], axs[0, 1]
+            ax3, ax4 = axs[1, 0], axs[1, 1]
+            ax5, ax6 = axs[2, 0], axs[2, 1]
+
+            # --- 子图 1: SINR 对比 ---
+            for l in range(L_sim):
+                ax1.plot(range(T), emp_sinr_dB[l, :, vk], color='#1f77b4', alpha=0.06, linewidth=0.8)
+            ax1.plot(range(T), mean_sinr_dB[:, vk], color='r', linewidth=2.5, label='Empirical Mean')
+            ax1.plot(range(T), DE_SINR_dB[:, vk], color='#d62728', linestyle='--', linewidth=3, label='DE SINR')
+            ax1.plot(range(T), Est_SINR_dB[:, vk], color='#ff7f0e', linestyle='-.', linewidth=2.5, label='Heuristic Est')
+            ax1.set_xlabel('Time Step (t)')
+            ax1.set_ylabel('SINR (dB)')
+            ax1.set_title(f'User {target_user}, Stream {s}: SINR over Time ($\\rho={rho_k[target_user]:.3f}$)')
+            ax1.legend(loc='upper right')
+            ax1.grid(True, linestyle=':', alpha=0.7)
+            ax1.set_xlim([0, T - 1])
+
+            # --- 子图 2: SINR 差值的 CDF ---
+            diff_dB_flat = (emp_sinr_dB[:, :, vk] - DE_SINR_dB[:, vk]).flatten()
+            prob_within_3db = np.sum(np.abs(diff_dB_flat) <= 3) / len(diff_dB_flat)
+            sorted_diff = np.sort(diff_dB_flat)
+            cdf = np.arange(1, len(sorted_diff) + 1) / len(sorted_diff)
+
+            ax2.plot(sorted_diff, cdf, color='#2ca02c', linewidth=2, label='CDF of Error')
+            ax2.axvspan(-3, 3, color='red', alpha=0.15, label=f'±3dB (Prob: {prob_within_3db:.1%})')
+            ax2.set_xlabel('Error (Empirical - DE) [dB]')
+            ax2.set_ylabel('CDF')
+            ax2.set_title(f'User {target_user}, Stream {s}: Overall SINR Error Distribution')
+            ax2.set_xlim(max(-10, -np.max(np.abs(sorted_diff)) - 1), max(10, np.max(np.abs(sorted_diff)) + 1))
+            ax2.set_ylim(0, 1.05)
+            ax2.legend(loc='upper left')
+            ax2.grid(True, linestyle=':', alpha=0.7)
+
+            # --- 子图 3: 有用信号功率对比 ---
+            for l in range(L_sim):
+                ax3.plot(range(T), emp_sig_dB[l, :, vk], color='#1f77b4', alpha=0.06, linewidth=0.8)
+            ax3.plot(range(T), mean_sig_dB[:, vk], color='r', linewidth=2.5, label='Empirical Mean Signal')
+            ax3.plot(range(T), DE_sig_dB[:, vk], color='#d62728', linestyle='--', linewidth=3, label='DE Signal Power')
+            ax3.plot(range(T), Est_sig_dB[:, vk], color='#ff7f0e', linestyle='-.', linewidth=2.5, label='Heuristic Signal')
+            ax3.set_xlabel('Time Step (t)')
+            ax3.set_ylabel('Signal Power (dB)')
+            ax3.set_title(f'User {target_user}, Stream {s}: Signal Power over Time')
+            ax3.legend(loc='best')
+            ax3.grid(True, linestyle=':', alpha=0.7)
+            ax3.set_xlim([0, T - 1])
+
+            # --- 子图 4: 干扰信号功率对比 ---
+            for l in range(L_sim):
+                ax4.plot(range(T), emp_int_dB[l, :, vk], color='#1f77b4', alpha=0.06, linewidth=0.8)
+            ax4.plot(range(T), mean_int_dB[:, vk], color='r', linewidth=2.5, label='Empirical Mean Interf')
+            ax4.plot(range(T), DE_int_dB[:, vk], color='#d62728', linestyle='--', linewidth=3, label='DE Interf Power')
+            ax4.plot(range(T), Est_int_dB[:, vk], color='#ff7f0e', linestyle='-.', linewidth=2.5, label='Heuristic Interf')
+            ax4.set_xlabel('Time Step (t)')
+            ax4.set_ylabel('Interference Power (dB)')
+            ax4.set_title(f'User {target_user}, Stream {s}: Interference Power over Time')
+            ax4.legend(loc='best')
+            ax4.grid(True, linestyle=':', alpha=0.7)
+            ax4.set_xlim([0, T - 1])
+
+            # --- 子图 5: SINR 随时间变化的 ±3dB 误差频率 ---
+            prob_de_3db_t = np.sum(np.abs(emp_sinr_dB[:, :, vk] - DE_SINR_dB[:, vk]) <= 3, axis=0) / L_sim
+            prob_est_3db_t = np.sum(np.abs(emp_sinr_dB[:, :, vk] - Est_SINR_dB[:, vk]) <= 3, axis=0) / L_sim
+            prob_mean_3db_t = np.sum(np.abs(emp_sinr_dB[:, :, vk] - mean_sinr_dB[:, vk]) <= 3, axis=0) / L_sim
+            ax5.plot(range(T), prob_de_3db_t, color='#d62728', marker='o', markersize=4, label='P(|Emp - DE| $\\leq$ 3dB)')
+            ax5.plot(range(T), prob_est_3db_t, color='#ff7f0e', marker='d', markersize=4,
+                     label='P(|Emp - Heuristic| $\\leq$ 3dB)')
+            ax5.plot(range(T), prob_mean_3db_t, color='#1f77b4', marker='s', markersize=4,
+                     label='P(|Emp - Mean| $\\leq$ 3dB)')
+            ax5.set_xlabel('Time Step (t)')
+            ax5.set_ylabel('Probability')
+            ax5.set_title(f'User {target_user}, Stream {s}: Prob of SINR Error $\\leq$ 3dB')
+            ax5.set_ylim(0, 1.05)
+            ax5.set_xlim([0, T - 1])
+            ax5.legend(loc='lower left')
+            ax5.grid(True, linestyle=':', alpha=0.7)
+
+            # --- 子图 6: DE-SINR 与 平均SINR 的差值随时间变化 ---
+            diff_de_mean = DE_SINR_dB[:, vk] - mean_sinr_dB[:, vk]
+            ax6.plot(range(T), diff_de_mean, color='#9467bd', linewidth=2, marker='^', markersize=5)
+            ax6.axhline(0, color='black', linestyle='--', linewidth=1)
+            ax6.set_xlabel('Time Step (t)')
+            ax6.set_ylabel('Difference (dB)')
+            ax6.set_title(f'User {target_user}, Stream {s}: DE-SINR minus Mean SINR')
+            ax6.set_xlim([0, T - 1])
+            max_diff = np.max(np.abs(diff_de_mean))
+            y_lim = max(0.5, max_diff * 1.5)
+            ax6.set_ylim(-y_lim, y_lim)
+            ax6.grid(True, linestyle=':', alpha=0.7)
+
+            plt.tight_layout()
+            plt.show()
+
+            # --------------------------------------------
+            # 画布 2: 新增的不确定性分析 (方差走势与采样点PDF) (1x2 布局)
+            # --------------------------------------------
+            fig2, (ax7, ax8) = plt.subplots(1, 2, figsize=(15, 6))
+
+            # 新增子图 1 (ax7): 计算真实SINR在每个时间步上的方差 (Variance) 走势
+            var_sinr = np.var(emp_sinr_dB[:, :, vk], axis=0)  # 沿L维计算每个t的方差
+            ax7.plot(range(T), var_sinr, color='#8c564b', linewidth=2.5, marker='o', markersize=5)
+            ax7.set_xlabel('Time Step (t)', fontsize=11)
+            ax7.set_ylabel('Variance of Empirical SINR', fontsize=11)
+            ax7.set_title(f'factor={corr_factor} User {target_user}, Stream {s}: SINR Variance over Time', fontsize=12)
+            ax7.grid(True, linestyle=':', alpha=0.7)
+            ax7.set_xlim([0, T - 1])
+
+            # 新增子图 2 (ax8): 统计位于 TF 整数倍上的分布 PDF
+            # 为不同时间步设置渐变颜色以示区分
+            colors = plt.cm.viridis(np.linspace(0, 0.9, len(range(10, T, TF))))
+
+            for idx, t_samp in enumerate(range(10, T, TF)):
+                data_t = emp_sinr_dB[:, t_samp, vk]
+                # 计算直方图的密度分布
+                counts, bin_edges = np.histogram(data_t, bins=15, density=True)
+                # 取每个 bin 的中点作为折线图的 X 轴坐标
+                bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+                ax8.plot(bin_centers, counts, marker='s', markersize=4, linewidth=2,
+                         color=colors[idx], label=f't = {t_samp}')
+
+            ax8.set_xlabel('Empirical SINR (dB)', fontsize=11)
+            ax8.set_ylabel('Probability Density (PDF)', fontsize=11)
+            ax8.set_title(f'factor={corr_factor} User {target_user}, Stream {s}: Sampled SINR PDF (Period $T_F={TF}$)', fontsize=12)
+            ax8.legend(loc='best')
+            ax8.grid(True, linestyle=':', alpha=0.7)
+
+            plt.tight_layout()
+            plt.show()
+
+if __name__ == "__main__":
+    main()

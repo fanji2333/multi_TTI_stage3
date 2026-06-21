@@ -798,7 +798,7 @@ if __name__ == '__main__':
 
     # 验证所提算法训练模型
     save = \
-            "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/自信道测试/SINR估计"
+            "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/自信道测试/MRT"
     cfgs = get_default_kwargs_yaml('P3O')
     eval_obj = myEvaluator(cfgs, save)
     data_dict = eval_obj.evaluate(T, need_plot=True)

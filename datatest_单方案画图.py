@@ -49,9 +49,13 @@ MCS_table = {
 
 # 方案数据
 method = "Multi-Cell SINR"
-save = "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/自信道测试/SINR估计"
+save = "/home/fj24/26_4_Huawei_multiTTI_stage3/runs/多小区/自信道测试/MRT"
 data_file_name = "eval_data.json"
 data_file_path = os.path.join(save, data_file_name)
+
+pic_save_path = save + "/绘图"
+if not os.path.exists(pic_save_path):
+    os.makedirs(pic_save_path)
 
 T = 160*10
 window_size = 400
@@ -161,21 +165,22 @@ for u in range(U):
     # plt.grid(True)
     # plt.show()
     #
-    # plt.figure()
-    # plt.plot(range(T), [m[0]+30 for m in interference[u]], label="layer 1")
-    # valid_indices = []
-    # filtered_data2 = []
-    # for i, m in enumerate(interference[u]):
-    #     if len(m) == 2:
-    #         valid_indices.append(i)
-    #         filtered_data2.append(m[1]+30)
-    # plt.plot(valid_indices, filtered_data2, label="layer 2")
-    # plt.legend()
-    # plt.xlabel("TTI")
-    # plt.ylabel("dBm")
-    # plt.title(f"{method} interference for user {u}")
-    # plt.grid(True)
-    # plt.show()
+    plt.figure()
+    plt.plot(range(T), [m[0]+30 for m in interference[u]], label="layer 1")
+    valid_indices = []
+    filtered_data2 = []
+    for i, m in enumerate(interference[u]):
+        if len(m) == 2:
+            valid_indices.append(i)
+            filtered_data2.append(m[1]+30)
+    plt.plot(valid_indices, filtered_data2, label="layer 2")
+    plt.legend()
+    plt.xlabel("TTI")
+    plt.ylabel("dBm")
+    plt.title(f"{method} interference for user {u}")
+    plt.grid(True)
+    plt.savefig(os.path.join(pic_save_path, f"{method} interference comparison for user {u}.png"))
+    plt.show()
     #
     # plt.figure()
     # plt.plot(range(T), [m[0]+30 for m in interference_ICI[u]], label="layer 1")
@@ -192,17 +197,18 @@ for u in range(U):
     # plt.title(f"{method} interference ICI for user {u}")
     # plt.grid(True)
     # plt.show()
-    #
-    # plt.figure()
-    # plt.plot(range(T), [m[0] + 30 for m in gain[u]], label="layer 1 real gain")
-    # plt.plot(range(T), [m[0] + 30 for m in gain_est[u]], label="layer 1 gain estimated")
-    # plt.legend()
-    # plt.xlabel("TTI")
-    # plt.ylabel("dBm")
-    # plt.title(f"{method} gain comparison for user {u}")
-    # plt.grid(True)
-    # plt.show()
-    #
+
+    plt.figure()
+    plt.plot(range(T), [m[0] + 30 for m in gain[u]], label="layer 1 real gain")
+    plt.plot(range(T), [m[0] + 30 for m in gain_est[u]], label="layer 1 gain estimated")
+    plt.legend()
+    plt.xlabel("TTI")
+    plt.ylabel("dBm")
+    plt.title(f"{method} gain comparison for user {u}")
+    plt.grid(True)
+    plt.savefig(os.path.join(pic_save_path, f"{method} gain comparison for user {u}.png"))
+    plt.show()
+
     # plt.figure()
     # iui = [10 ** (m[0] / 10) for m in interference[u]]
     # ici = [10 ** (m[0] / 10) for m in interference_ICI[u]]
@@ -212,13 +218,10 @@ for u in range(U):
     # plt.legend()
     # plt.xlabel("TTI")
     # plt.ylabel("dBm")
-    # plt.title(f"{method} interference comparison for user {u}")
+    # plt.title(f"{method} interference all comparison for user {u}")
     # plt.grid(True)
+    # plt.savefig(os.path.join(pic_save_path, f"{method} interference all comparison for user {u}.png"))
     # plt.show()
-
-    pic_save_path = save + "/动态ICI估计"
-    if not os.path.exists(pic_save_path):
-        os.makedirs(pic_save_path)
 
     plt.figure()
     for k, v in interference_ICI_dict[u][0]['0'].items():
